@@ -262,24 +262,27 @@
 <body>
 <div class="wrap">
 
-  <section class="panel" id="settingsPanel">
-    <h2>⚙️ Settings <span class="badge">saved only in this browser</span></h2>
-    <p class="hint">This is the public/hosted copy — nothing sensitive is stored in the page itself. Paste your own values below once; they're saved to this browser's local storage only (never sent anywhere, never part of the page source).</p>
-    <div class="field-row"><label>Apps Script URL</label><input type="text" id="cfgGasUrl" placeholder="https://script.google.com/macros/s/xxxxx/exec" style="flex:1;min-width:220px;"></div>
-    <div class="field-row"><label>Daily raw folder ID</label><input type="text" id="cfgDailyRaw" style="flex:1;min-width:220px;"></div>
-    <div class="field-row"><label>Daily report folder ID</label><input type="text" id="cfgDailyReport" style="flex:1;min-width:220px;"></div>
-    <div class="field-row"><label>Weekly raw folder ID</label><input type="text" id="cfgWeeklyRaw" style="flex:1;min-width:220px;"></div>
-    <div class="field-row"><label>Weekly report folder ID</label><input type="text" id="cfgWeeklyReport" style="flex:1;min-width:220px;"></div>
-    <div class="field-row"><label>Twelve Data API key</label><input type="password" id="cfgTwelveKey" style="flex:1;min-width:220px;"></div>
-    <div class="actions" style="margin-top:6px;">
-      <button id="cfgSaveBtn">Save settings</button>
-      <span id="cfgStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
-    </div>
-  </section>
-
   <div class="top-tabs">
     <button class="top-tab active" data-toptab="daily">Daily</button>
     <button class="top-tab" data-toptab="weekly">Weekly</button>
+    <button class="top-tab" data-toptab="settings">⚙️ Settings</button>
+  </div>
+
+  <div id="settingsPane" class="top-pane">
+    <section class="panel">
+      <h2>⚙️ Settings <span class="badge">saved only in this browser</span></h2>
+      <p class="hint">This is the public/hosted copy — nothing sensitive is stored in the page itself. Paste your own values below once; they're saved to this browser's local storage only (never sent anywhere, never part of the page source).</p>
+      <div class="field-row"><label>Apps Script URL</label><input type="text" id="cfgGasUrl" placeholder="https://script.google.com/macros/s/xxxxx/exec" style="flex:1;min-width:220px;"></div>
+      <div class="field-row"><label>Daily raw folder ID</label><input type="text" id="cfgDailyRaw" style="flex:1;min-width:220px;"></div>
+      <div class="field-row"><label>Daily report folder ID</label><input type="text" id="cfgDailyReport" style="flex:1;min-width:220px;"></div>
+      <div class="field-row"><label>Weekly raw folder ID</label><input type="text" id="cfgWeeklyRaw" style="flex:1;min-width:220px;"></div>
+      <div class="field-row"><label>Weekly report folder ID</label><input type="text" id="cfgWeeklyReport" style="flex:1;min-width:220px;"></div>
+      <div class="field-row"><label>Twelve Data API key</label><input type="password" id="cfgTwelveKey" style="flex:1;min-width:220px;"></div>
+      <div class="actions" style="margin-top:6px;">
+        <button id="cfgSaveBtn">Save settings</button>
+        <span id="cfgStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
+      </div>
+    </section>
   </div>
 
   <div id="dailyPane" class="top-pane">
@@ -1889,7 +1892,14 @@ function jsonpFetch(url, timeoutMs){
   });
 }
 
-async function fetchLatestReport(folderId, bodyEl, statusEl, ext){
+function saveLocalCache(key, filename, lastUpdated, content){
+  try{ localStorage.setItem(key, JSON.stringify({filename, lastUpdated, content})); }catch(e){}
+}
+function loadLocalCache(key){
+  try{ const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
+}
+
+async function fetchLatestReport(folderId, bodyEl, statusEl, ext, cacheKey){
   statusEl.textContent = 'Loading...';
   bodyEl.innerHTML = '';
   try{
@@ -1903,6 +1913,7 @@ async function fetchLatestReport(folderId, bodyEl, statusEl, ext){
     }
     renderReportInto(bodyEl, json.content);
     statusEl.textContent = `Loaded "${json.filename}" (updated ${new Date(json.lastUpdated).toLocaleString()}).`;
+    if(cacheKey) saveLocalCache(cacheKey, json.filename, json.lastUpdated, json.content);
   }catch(e){
     statusEl.textContent = 'Failed to reach the Drive script: ' + e.message;
   }
@@ -1912,11 +1923,25 @@ let DAILY_REPORT_FOLDER = localStorage.getItem('bc_dailyReport') || '';
 let WEEKLY_REPORT_FOLDER = localStorage.getItem('bc_weeklyReport') || '';
 
 document.getElementById('dailyReportFetchBtn').addEventListener('click', () => {
-  fetchLatestReport(DAILY_REPORT_FOLDER, document.getElementById('dailyReportBody'), document.getElementById('dailyReportStatus'), 'md');
+  fetchLatestReport(DAILY_REPORT_FOLDER, document.getElementById('dailyReportBody'), document.getElementById('dailyReportStatus'), 'md', 'bc_cache_dailyReport');
 });
 document.getElementById('weeklyReportFetchBtn').addEventListener('click', () => {
-  fetchLatestReport(WEEKLY_REPORT_FOLDER, document.getElementById('weeklyReportBody'), document.getElementById('weeklyReportStatus'), 'md');
+  fetchLatestReport(WEEKLY_REPORT_FOLDER, document.getElementById('weeklyReportBody'), document.getElementById('weeklyReportStatus'), 'md', 'bc_cache_weeklyReport');
 });
+
+// Restore whatever report was last successfully loaded, so it's there immediately without a fresh click.
+(function restoreReportCaches(){
+  const d = loadLocalCache('bc_cache_dailyReport');
+  if(d){
+    renderReportInto(document.getElementById('dailyReportBody'), d.content);
+    document.getElementById('dailyReportStatus').textContent = `Loaded "${d.filename}" (updated ${new Date(d.lastUpdated).toLocaleString()}) — from local cache. Click "Load latest report" to refresh.`;
+  }
+  const w = loadLocalCache('bc_cache_weeklyReport');
+  if(w){
+    renderReportInto(document.getElementById('weeklyReportBody'), w.content);
+    document.getElementById('weeklyReportStatus').textContent = `Loaded "${w.filename}" (updated ${new Date(w.lastUpdated).toLocaleString()}) — from local cache. Click "Load latest report" to refresh.`;
+  }
+})();
 
 // ================= Podcast (shared logic for Daily + Weekly) =================
 function parsePodcastScript(text){
@@ -1980,10 +2005,20 @@ function setupPodcast(cfg){
       if(json.status !== 'ok'){ loadStatus.textContent = 'Error: ' + (json.message || 'not found'); return; }
       scriptEl.value = json.content;
       loadStatus.textContent = `Loaded "${json.filename}" (updated ${new Date(json.lastUpdated).toLocaleString()}).`;
+      if(cfg.cacheKey) saveLocalCache(cfg.cacheKey, json.filename, json.lastUpdated, json.content);
     }catch(e){
       loadStatus.textContent = 'Failed to reach the Drive script: ' + e.message;
     }
   });
+
+  // Restore last successfully loaded script from cache, so it's already there without a fresh click.
+  if(cfg.cacheKey){
+    const cached = loadLocalCache(cfg.cacheKey);
+    if(cached){
+      scriptEl.value = cached.content;
+      loadStatus.textContent = `Loaded "${cached.filename}" (updated ${new Date(cached.lastUpdated).toLocaleString()}) — from local cache. Click "Load latest script" to refresh.`;
+    }
+  }
 
   playBtn.addEventListener('click', () => {
     const text = scriptEl.value;
@@ -2029,14 +2064,16 @@ setupPodcast({
   loadBtnId: 'weeklyPodcastLoadBtn', loadStatusId: 'weeklyPodcastLoadStatus',
   scriptId: 'weeklyPodcastScript', playBtnId: 'weeklyPodcastPlayBtn',
   pauseBtnId: 'weeklyPodcastPauseBtn', stopBtnId: 'weeklyPodcastStopBtn', copyBtnId: 'weeklyPodcastCopyBtn',
-  voiceStatusId: 'weeklyPodcastVoiceStatus', transcriptId: 'weeklyPodcastTranscript'
+  voiceStatusId: 'weeklyPodcastVoiceStatus', transcriptId: 'weeklyPodcastTranscript',
+  cacheKey: 'bc_cache_weeklyPodcast'
 });
 setupPodcast({
   folderId: DAILY_REPORT_FOLDER,
   loadBtnId: 'dailyPodcastLoadBtn', loadStatusId: 'dailyPodcastLoadStatus',
   scriptId: 'dailyPodcastScript', playBtnId: 'dailyPodcastPlayBtn',
   pauseBtnId: 'dailyPodcastPauseBtn', stopBtnId: 'dailyPodcastStopBtn', copyBtnId: 'dailyPodcastCopyBtn',
-  voiceStatusId: 'dailyPodcastVoiceStatus', transcriptId: 'dailyPodcastTranscript'
+  voiceStatusId: 'dailyPodcastVoiceStatus', transcriptId: 'dailyPodcastTranscript',
+  cacheKey: 'bc_cache_dailyPodcast'
 });
 
 // ================= Settings panel (public/hosted copy — nothing sensitive in the page source) =================
