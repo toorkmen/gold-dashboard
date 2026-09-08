@@ -430,6 +430,7 @@
           <button id="dailyPodcastPauseBtn">⏸ Pause</button>
           <button id="dailyPodcastStopBtn">⏹ Stop</button>
           <button id="dailyPodcastCopyBtn" style="background:var(--gold);color:#1a1409;">📋 Copy full script</button>
+          <button id="dailyPodcastListVoicesBtn">🔍 List available voices</button>
           <span id="dailyPodcastVoiceStatus" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);"></span>
         </div>
         <div id="dailyPodcastTranscript" class="md-body" style="margin-top:14px;"></div>
@@ -624,6 +625,7 @@
           <button id="weeklyPodcastPauseBtn">⏸ Pause</button>
           <button id="weeklyPodcastStopBtn">⏹ Stop</button>
           <button id="weeklyPodcastCopyBtn" style="background:var(--gold);color:#1a1409;">📋 Copy full script</button>
+          <button id="weeklyPodcastListVoicesBtn">🔍 List available voices</button>
           <span id="weeklyPodcastVoiceStatus" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);"></span>
         </div>
         <div id="weeklyPodcastTranscript" class="md-body" style="margin-top:14px;"></div>
@@ -2038,8 +2040,21 @@ function setupPodcast(cfg){
   const pauseBtn = document.getElementById(cfg.pauseBtnId);
   const stopBtn = document.getElementById(cfg.stopBtnId);
   const copyBtn = document.getElementById(cfg.copyBtnId);
+  const listVoicesBtn = document.getElementById(cfg.listVoicesBtnId);
   const voiceStatus = document.getElementById(cfg.voiceStatusId);
   const transcriptEl = document.getElementById(cfg.transcriptId);
+
+  if(listVoicesBtn){
+    listVoicesBtn.addEventListener('click', async () => {
+      voiceStatus.textContent = 'Checking this device\'s voices...';
+      if(!('speechSynthesis' in window)){ voiceStatus.textContent = 'This browser does not support speech synthesis at all.'; return; }
+      const voices = await getVoicesAsync();
+      if(!voices.length){ voiceStatus.textContent = 'No voices reported by this browser/device.'; return; }
+      const lines = voices.map(v => `${v.name} — ${v.lang}${v.default ? ' (default)' : ''}`);
+      transcriptEl.innerHTML = `<p><strong>${voices.length} voice(s) found on this device:</strong></p><p style="white-space:pre-line;font-family:var(--mono);font-size:12px;">${lines.join('\n')}</p>`;
+      voiceStatus.textContent = `Found ${voices.length} voice(s) — see the list below.`;
+    });
+  }
 
   if(!('speechSynthesis' in window) && voiceStatus) voiceStatus.textContent = 'This browser does not support speech synthesis.';
 
@@ -2156,7 +2171,7 @@ setupPodcast({
   folderId: WEEKLY_REPORT_FOLDER,
   loadBtnId: 'weeklyPodcastLoadBtn', loadStatusId: 'weeklyPodcastLoadStatus',
   scriptId: 'weeklyPodcastScript', playBtnId: 'weeklyPodcastPlayBtn',
-  pauseBtnId: 'weeklyPodcastPauseBtn', stopBtnId: 'weeklyPodcastStopBtn', copyBtnId: 'weeklyPodcastCopyBtn',
+  pauseBtnId: 'weeklyPodcastPauseBtn', stopBtnId: 'weeklyPodcastStopBtn', copyBtnId: 'weeklyPodcastCopyBtn', listVoicesBtnId: 'weeklyPodcastListVoicesBtn',
   voiceStatusId: 'weeklyPodcastVoiceStatus', transcriptId: 'weeklyPodcastTranscript',
   cacheKey: 'bc_cache_weeklyPodcast'
 });
@@ -2164,7 +2179,7 @@ setupPodcast({
   folderId: DAILY_REPORT_FOLDER,
   loadBtnId: 'dailyPodcastLoadBtn', loadStatusId: 'dailyPodcastLoadStatus',
   scriptId: 'dailyPodcastScript', playBtnId: 'dailyPodcastPlayBtn',
-  pauseBtnId: 'dailyPodcastPauseBtn', stopBtnId: 'dailyPodcastStopBtn', copyBtnId: 'dailyPodcastCopyBtn',
+  pauseBtnId: 'dailyPodcastPauseBtn', stopBtnId: 'dailyPodcastStopBtn', copyBtnId: 'dailyPodcastCopyBtn', listVoicesBtnId: 'dailyPodcastListVoicesBtn',
   voiceStatusId: 'dailyPodcastVoiceStatus', transcriptId: 'dailyPodcastTranscript',
   cacheKey: 'bc_cache_dailyPodcast'
 });
