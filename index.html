@@ -444,7 +444,7 @@
           <button id="dailyInterpFetchBtn">Load latest interpretation</button>
           <span id="dailyInterpStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
         </div>
-        <div id="dailyInterpBody"></div>
+        <div id="dailyInterpBody" dir="rtl" style="text-align:right;"></div>
       </section>
     </div>
 
@@ -1999,8 +1999,20 @@ function guessVoiceGender(name){
   if(maleNames.some(m => n.includes(m))) return 'male';
   return null;
 }
-function pickVoicesForLang(langPrefix){
-  const voices = speechSynthesis.getVoices();
+// speechSynthesis.getVoices() can return an empty list right after page load, until the
+// browser finishes loading voices asynchronously — this waits for that instead of failing silently.
+function getVoicesAsync(){
+  return new Promise(resolve => {
+    let voices = speechSynthesis.getVoices();
+    if(voices.length){ resolve(voices); return; }
+    const onChange = () => { speechSynthesis.onvoiceschanged = null; resolve(speechSynthesis.getVoices()); };
+    speechSynthesis.onvoiceschanged = onChange;
+    setTimeout(() => { speechSynthesis.onvoiceschanged = null; resolve(speechSynthesis.getVoices()); }, 1200);
+  });
+}
+
+async function pickVoicesForLang(langPrefix){
+  const voices = await getVoicesAsync();
   const matched = voices.filter(v => v.lang && v.lang.toLowerCase().startsWith(langPrefix));
   if(matched.length === 0) return {male: null, female: null, fallback: voices[0] || null, list: []};
 
@@ -2065,44 +2077,77 @@ function setupPodcast(cfg){
     }
   }
 
-  playBtn.addEventListener('click', () => {
-    if(!('speechSynthesis' in window)) return;
-    if(speechSynthesis.paused){ speechSynthesis.resume(); return; } // resume instead of restarting from zero
-    if(speechSynthesis.speaking) return; // already playing — do nothing rather than restart mid-way
+  // Manual playback state — we drive one utterance at a time ourselves instead of relying on the
+  // browser's native pause()/resume() queue handling, which is unreliable across multi-utterance
+  // sequences in Chrome. Pause = fully stop + remember which segment we were on; Play = re-speak
+  // starting from that same segment (not from zero).
+  let pcSegments = [];
+  let pcIndex = 0;
+  let pcPlaying = false;
+  let pcLangTag = 'en-US';
+  let pcVoices = {male:null, female:null, fallback:null};
+  let pcLastText = '';
+
+  function pcHighlightAndBuildTranscript(activeIdx){
+    let html = '';
+    pcSegments.forEach((seg,i) => {
+      const activeStyle = (i===activeIdx) ? ' style="color:var(--gold);"' : '';
+      html += `<p${activeStyle}><strong>${seg.rawLabel}:</strong> ${seg.text}</p>`;
+    });
+    transcriptEl.innerHTML = html;
+  }
+
+  function pcSpeakFrom(idx){
+    if(idx >= pcSegments.length){ pcPlaying = false; pcIndex = 0; return; }
+    pcIndex = idx;
+    pcHighlightAndBuildTranscript(idx);
+    const seg = pcSegments[idx];
+    const u = new SpeechSynthesisUtterance(seg.text);
+    u.lang = pcLangTag;
+    if(pcVoices.male && seg.speaker==='male'){ u.voice = pcVoices.male; u.pitch = 0.9; }
+    else if(pcVoices.female && seg.speaker==='female'){ u.voice = pcVoices.female; u.pitch = (pcVoices.male===pcVoices.female) ? 1.4 : 1.0; }
+    else if(pcVoices.fallback){ u.voice = pcVoices.fallback; u.pitch = seg.speaker==='male' ? 0.9 : 1.3; }
+    u.onend = () => { if(pcPlaying) pcSpeakFrom(idx+1); };
+    u.onerror = () => { if(pcPlaying) pcSpeakFrom(idx+1); }; // skip a problem segment instead of getting stuck
+    speechSynthesis.speak(u);
+  }
+
+  playBtn.addEventListener('click', async () => {
+    if(!('speechSynthesis' in window) || pcPlaying) return;
     const text = scriptEl.value;
     if(!text.trim()) return;
-    speechSynthesis.cancel();
-    const segments = parsePodcastScript(text);
-    if(segments.length === 0){
+
+    if(text !== pcLastText || pcSegments.length === 0){
+      pcSegments = parsePodcastScript(text);
+      pcIndex = 0;
+      pcLastText = text;
+    }
+    if(pcSegments.length === 0){
       voiceStatus.textContent = 'No speaker labels found (expected "Man:"/"Woman:" or "آقا:"/"خانم:") — check the script format.';
       return;
     }
+
     const lang = detectScriptLanguage(text);
-    const langTag = lang === 'fa' ? 'fa-IR' : 'en-US';
+    pcLangTag = lang === 'fa' ? 'fa-IR' : 'en-US';
     const langName = lang === 'fa' ? 'Persian' : 'English';
-    const voices = pickVoicesForLang(lang);
-    if(voices.list.length >= 2) voiceStatus.textContent = `Using 2 ${langName} voices: ${voices.list[0].name} / ${voices.list[1].name}`;
-    else if(voices.list.length === 1) voiceStatus.textContent = `Only 1 ${langName} voice found (${voices.list[0].name}) — using pitch variation to distinguish speakers.`;
+    voiceStatus.textContent = 'Preparing voices...';
+    pcVoices = await pickVoicesForLang(lang);
+    if(pcVoices.list.length >= 2) voiceStatus.textContent = `Using 2 ${langName} voices: ${pcVoices.list[0].name} / ${pcVoices.list[1].name}`;
+    else if(pcVoices.list.length === 1) voiceStatus.textContent = `Only 1 ${langName} voice found (${pcVoices.list[0].name}) — using pitch variation to distinguish speakers.`;
     else voiceStatus.textContent = `No ${langName} voice found on this system — falling back to the default voice.`;
 
-    let transcriptHtml = '';
-    segments.forEach(seg => {
-      const u = new SpeechSynthesisUtterance(seg.text);
-      u.lang = langTag;
-      if(voices.male && seg.speaker==='male'){ u.voice = voices.male; u.pitch = 0.9; }
-      else if(voices.female && seg.speaker==='female'){ u.voice = voices.female; u.pitch = (voices.male===voices.female) ? 1.4 : 1.0; }
-      else if(voices.fallback){ u.voice = voices.fallback; u.pitch = seg.speaker==='male' ? 0.9 : 1.3; }
-      speechSynthesis.speak(u);
-      transcriptHtml += `<p><strong>${seg.rawLabel}:</strong> ${seg.text}</p>`;
-    });
-    transcriptEl.innerHTML = transcriptHtml;
+    speechSynthesis.cancel();
+    pcPlaying = true;
+    pcSpeakFrom(pcIndex);
   });
   pauseBtn.addEventListener('click', () => {
-    if(!('speechSynthesis' in window)) return;
-    if(speechSynthesis.speaking && !speechSynthesis.paused) speechSynthesis.pause();
-    else if(speechSynthesis.paused) speechSynthesis.resume();
+    if(!('speechSynthesis' in window) || !pcPlaying) return;
+    pcPlaying = false;      // tell the onend handler not to auto-advance
+    speechSynthesis.cancel(); // fully stop — pcIndex already points at the segment we were on
   });
   stopBtn.addEventListener('click', () => {
+    pcPlaying = false;
+    pcIndex = 0;
     if('speechSynthesis' in window) speechSynthesis.cancel();
   });
 }
