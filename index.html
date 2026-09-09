@@ -355,7 +355,7 @@
     <h2><span class="num">4</span> Asia / London / New York session High/Low (XAU/USD)</h2>
     <p class="hint">
       Instead of reading the TradingView chart by hand, 15-minute candle data comes from Twelve Data (free) and each session's High/Low is computed automatically.
-      Windows: Asia 23:30–09:00, London 10:30–16:30, New York 17:00–23:30 (Tehran time).
+      Windows: Asia 23:30–09:30, London 10:30–16:30, New York 17:00–23:30 (Tehran time).
     </p>
     <div class="field-row">
       <label for="tdApiKey">API key (free)</label>
@@ -378,8 +378,13 @@
     </div>
 
     <div id="sessionResultWrap" style="display:none;margin-top:16px;">
+      <p class="hint" style="margin-bottom:6px;font-weight:600;color:var(--gold);">Yesterday (complete)</p>
       <div class="scroll-x">
-        <table class="session-table" id="sessionTable"></table>
+        <table class="session-table" id="sessionTableYesterday"></table>
+      </div>
+      <p class="hint" style="margin:18px 0 6px;font-weight:600;color:var(--gold);">Today (so far)</p>
+      <div class="scroll-x">
+        <table class="session-table" id="sessionTableToday"></table>
       </div>
       <div class="actions" style="margin:12px 0 0;">
         <button id="sessionDownloadBtn" style="background:var(--green);color:#0d1f16;">Download CSV</button>
@@ -433,6 +438,12 @@
           <button id="dailyPodcastListVoicesBtn">🔍 List available voices</button>
           <span id="dailyPodcastVoiceStatus" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);"></span>
         </div>
+        <div class="field-row" style="margin-top:8px;">
+          <label>Voice — Man/آقا</label>
+          <select id="dailyPodcastVoiceMale" style="flex:1;min-width:180px;"><option value="">Auto (best guess)</option></select>
+          <label style="margin-inline-start:12px;">Voice — Woman/خانم</label>
+          <select id="dailyPodcastVoiceFemale" style="flex:1;min-width:180px;"><option value="">Auto (best guess)</option></select>
+        </div>
         <div id="dailyPodcastTranscript" class="md-body" style="margin-top:14px;"></div>
       </section>
     </div>
@@ -456,6 +467,7 @@
     <div class="sub-tabs">
       <button class="sub-tab active" data-subtab="weekly-gather">Data Gathering</button>
       <button class="sub-tab" data-subtab="weekly-report">Report</button>
+      <button class="sub-tab" data-subtab="weekly-interp">Interpretation</button>
     </div>
 
     <div id="weekly-gather" class="sub-pane">
@@ -628,7 +640,25 @@
           <button id="weeklyPodcastListVoicesBtn">🔍 List available voices</button>
           <span id="weeklyPodcastVoiceStatus" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);"></span>
         </div>
+        <div class="field-row" style="margin-top:8px;">
+          <label>Voice — Man/آقا</label>
+          <select id="weeklyPodcastVoiceMale" style="flex:1;min-width:180px;"><option value="">Auto (best guess)</option></select>
+          <label style="margin-inline-start:12px;">Voice — Woman/خانم</label>
+          <select id="weeklyPodcastVoiceFemale" style="flex:1;min-width:180px;"><option value="">Auto (best guess)</option></select>
+        </div>
         <div id="weeklyPodcastTranscript" class="md-body" style="margin-top:14px;"></div>
+      </section>
+    </div>
+
+    <div id="weekly-interp" class="sub-pane">
+      <section class="panel">
+        <h2>Latest Weekly Interpretation</h2>
+        <p class="hint">Reads the most recently modified <code>.md</code> file whose name contains "Interpretation" from the weekly report folder, and splits it into tabs by section, same as the main report.</p>
+        <div class="actions" style="margin:0 0 12px;">
+          <button id="weeklyInterpFetchBtn">Load latest interpretation</button>
+          <span id="weeklyInterpStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
+        </div>
+        <div id="weeklyInterpBody" dir="rtl" style="text-align:right;"></div>
       </section>
     </div>
   </div>
@@ -1113,7 +1143,6 @@ const tdApiKey = document.getElementById('tdApiKey');
 const sessionFetchBtn = document.getElementById('sessionFetchBtn');
 const sessionStatus = document.getElementById('sessionStatus');
 const sessionResultWrap = document.getElementById('sessionResultWrap');
-const sessionTable = document.getElementById('sessionTable');
 const futuresInput = document.getElementById('futuresInput');
 const futuresPaste = document.getElementById('futuresPaste');
 const copyStatus = document.getElementById('copyStatus');
@@ -1130,8 +1159,10 @@ futuresPaste.addEventListener('input', () => {
 });
 futuresInput.addEventListener('input', syncFuturesCell);
 function syncFuturesCell(){
-  const cell = document.getElementById('futuresCell');
-  if(cell) cell.textContent = futuresInput.value.trim() || '—';
+  ['t_London_futures','t_NY_futures'].forEach(id => {
+    const cell = document.getElementById(id);
+    if(cell) cell.textContent = futuresInput.value.trim() || '—';
+  });
 }
 
 let sessionRowData = null;
@@ -1156,34 +1187,72 @@ function fmtDMY(dateStr){
   return `${d}${months[m-1]}${y}`;
 }
 
-// returns {high,low} only if the session has fully ended by now (nowStr >= end).
-// null = session hasn't finished yet (either not started, or still in progress).
-function computeHL(bars, start, end, nowStr){
+// Returns {high, highTime, low, lowTime, close} only once the period has fully ended (nowStr >= end).
+// null = period hasn't finished yet (either not started, or still in progress).
+function computeHLTC(bars, start, end, nowStr){
   if(nowStr < end) return null;
   const inRange = bars.filter(b => b.datetime >= start && b.datetime < end);
   if(inRange.length === 0) return null;
-  const high = Math.max(...inRange.map(b=>parseFloat(b.high)));
-  const low = Math.min(...inRange.map(b=>parseFloat(b.low)));
-  return {high, low};
-}
-function windowsFor(dateD, dateDminus1){
+  let highBar = inRange[0], lowBar = inRange[0], lastBar = inRange[0];
+  inRange.forEach(b => {
+    if(parseFloat(b.high) > parseFloat(highBar.high)) highBar = b;
+    if(parseFloat(b.low) < parseFloat(lowBar.low)) lowBar = b;
+    if(b.datetime > lastBar.datetime) lastBar = b;
+  });
   return {
-    Asia:    [`${dateDminus1} 23:30:00`, `${dateD} 09:00:00`],
-    London:  [`${dateD} 10:30:00`,       `${dateD} 16:30:00`],
-    NY:      [`${dateD} 17:00:00`,       `${dateD} 23:30:00`],
-    FullDay: [`${dateDminus1} 23:30:00`, `${dateD} 23:30:00`],
+    high: parseFloat(highBar.high), highTime: highBar.datetime.slice(11,16),
+    low: parseFloat(lowBar.low), lowTime: lowBar.datetime.slice(11,16),
+    close: parseFloat(lastBar.close)
   };
 }
-function buildRow(bars, dateD, dateDminus1, nowStr){
-  const w = windowsFor(dateD, dateDminus1);
-  const fmt = r => r ? `${r.high.toFixed(2)}/${r.low.toFixed(2)}` : '—';
+const SESSION_PERIODS = [
+  {key:'PreTokyo',  label:'Pre-Tokyo (fake)',  futures:false},
+  {key:'Tokyo',     label:'Tokyo',             futures:false},
+  {key:'PreLondon', label:'Pre-London (fake)', futures:false},
+  {key:'London',    label:'London',            futures:true},
+  {key:'PreNY',     label:'Pre-NY (fake)',     futures:false},
+  {key:'NY',        label:'New York',          futures:true},
+  {key:'EndOfDay',  label:'End-of-day (fake)', futures:false},
+  {key:'FullDay',   label:'Full day',          futures:false},
+];
+function windowsFor(dateD, dateDplus1){
   return {
-    date: fmtDMY(dateD),
-    asia: fmt(computeHL(bars, w.Asia[0], w.Asia[1], nowStr)),
-    london: fmt(computeHL(bars, w.London[0], w.London[1], nowStr)),
-    ny: fmt(computeHL(bars, w.NY[0], w.NY[1], nowStr)),
-    full: fmt(computeHL(bars, w.FullDay[0], w.FullDay[1], nowStr)),
+    PreTokyo:  [`${dateD} 01:30:00`, `${dateD} 03:30:00`],
+    Tokyo:     [`${dateD} 03:30:00`, `${dateD} 09:30:00`],
+    PreLondon: [`${dateD} 09:30:00`, `${dateD} 10:30:00`],
+    London:    [`${dateD} 10:30:00`, `${dateD} 16:00:00`],
+    PreNY:     [`${dateD} 16:00:00`, `${dateD} 17:00:00`],
+    NY:        [`${dateD} 17:00:00`, `${dateD} 23:30:00`],
+    EndOfDay:  [`${dateD} 23:30:00`, `${dateDplus1} 00:30:00`],
+    FullDay:   [`${dateD} 01:30:00`, `${dateDplus1} 00:30:00`],
   };
+}
+function buildRow(bars, dateD, dateDplus1, nowStr){
+  const w = windowsFor(dateD, dateDplus1);
+  return SESSION_PERIODS.map(p => {
+    const [start,end] = w[p.key];
+    const r = computeHLTC(bars, start, end, nowStr);
+    return {
+      key:p.key, label:p.label, hasFutures:p.futures, start:start.slice(11,16), end:end.slice(11,16),
+      endsNextDay: end.slice(0,10) !== start.slice(0,10),
+      high: r ? r.high.toFixed(2) : '—', highTime: r ? r.highTime : '—',
+      low: r ? r.low.toFixed(2) : '—', lowTime: r ? r.lowTime : '—',
+      close: r ? r.close.toFixed(2) : '—'
+    };
+  });
+}
+function periodsTableHtml(rows, blockId){
+  const ed = 'contenteditable="true" class="editable-cell"';
+  let html = '<thead><tr><th>Period</th><th>Start</th><th>End</th><th>High</th><th>High Time</th><th>Low</th><th>Low Time</th><th>Close</th><th>Futures</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    const endLabel = r.endsNextDay ? `${r.end} (+1)` : r.end;
+    const futuresCell = r.hasFutures
+      ? `<td ${ed} id="${blockId}_${r.key}_futures">—</td>`
+      : `<td>—</td>`;
+    html += `<tr><td class="row-tag">${r.label}</td><td ${ed}>${r.start}</td><td ${ed}>${endLabel}</td><td ${ed}>${r.high}</td><td ${ed}>${r.highTime}</td><td ${ed}>${r.low}</td><td ${ed}>${r.lowTime}</td><td ${ed}>${r.close}</td>${futuresCell}</tr>`;
+  });
+  html += '</tbody>';
+  return html;
 }
 
 sessionFetchBtn.addEventListener('click', async () => {
@@ -1195,83 +1264,60 @@ sessionFetchBtn.addEventListener('click', async () => {
   try{
     const today = tehranDateStr(new Date());
     const yesterday = addDays(today, -1);
-    const dayBefore = addDays(today, -2);
+    const tomorrow = addDays(today, 1);
     const nowStr = nowTehranStr();
 
-    // 200 bars * 15min ≈ 50h lookback: covers dayBefore 23:30 → now, comfortably spanning both rows
-    const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=15min&outputsize=200&timezone=Asia/Tehran&apikey=${encodeURIComponent(key)}`;
+    // 300 bars * 15min ≈ 75h lookback: comfortably covers yesterday 01:30 → today's full-day end
+    const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=15min&outputsize=300&timezone=Asia/Tehran&apikey=${encodeURIComponent(key)}`;
     const res = await fetch(url);
     const json = await res.json();
     if(json.status === 'error' || !json.values){
       sessionStatus.textContent = 'API error: ' + (json.message || 'invalid response');
       return;
     }
-    const bars = json.values.map(v => ({datetime:v.datetime, high:v.high, low:v.low}));
+    const bars = json.values.map(v => ({datetime:v.datetime, high:v.high, low:v.low, close:v.close}));
 
-    const yesterdayRow = buildRow(bars, yesterday, dayBefore, nowStr); // fully in the past → always complete
-    const todayRow = buildRow(bars, today, yesterday, nowStr);         // partial, only up to now
+    const yesterdayRows = buildRow(bars, yesterday, today, nowStr); // fully in the past → always complete
+    const todayRows = buildRow(bars, today, tomorrow, nowStr);      // partial, only up to now
 
-    let current = '—';
-    try{
-      const priceRes = await fetch(`https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${encodeURIComponent(key)}`);
-      const priceJson = await priceRes.json();
-      if(priceJson.price) current = parseFloat(priceJson.price).toFixed(2);
-    }catch(e){ /* ignore, keep — */ }
+    document.getElementById('sessionTableYesterday').innerHTML = periodsTableHtml(yesterdayRows, 'y');
+    document.getElementById('sessionTableToday').innerHTML = periodsTableHtml(todayRows, 't');
 
-    sessionRowData = {yesterday: yesterdayRow, today: todayRow, current};
+    // Convenience prefill for today's two editable Futures cells (from the shared Futures field elsewhere on the page).
+    const todayLondonFutures = document.getElementById('t_London_futures');
+    const todayNYFutures = document.getElementById('t_NY_futures');
+    if(todayLondonFutures) todayLondonFutures.textContent = futuresInput.value || '—';
+    if(todayNYFutures) todayNYFutures.textContent = futuresInput.value || '—';
 
-    const ed = 'contenteditable="true" class="editable-cell"';
-    let html = '<thead><tr><th></th><th>Date</th><th>Asia H/L</th><th>London H/L</th><th>NY H/L</th><th>Full day H/L</th><th>Current</th><th>Futures</th><th></th></tr></thead><tbody>';
-    html += `<tr><td class="row-tag">Yesterday (complete)</td><td ${ed}>${yesterdayRow.date}</td><td ${ed}>${yesterdayRow.asia}</td><td ${ed}>${yesterdayRow.london}</td><td ${ed}>${yesterdayRow.ny}</td><td ${ed}>${yesterdayRow.full}</td><td ${ed}>—</td><td ${ed}>—</td><td><button class="copy-row-inline" data-row="yesterday">Copy</button></td></tr>`;
-    html += `<tr><td class="row-tag">Today (so far)</td><td ${ed}>${todayRow.date}</td><td ${ed}>${todayRow.asia}</td><td ${ed}>${todayRow.london}</td><td ${ed}>${todayRow.ny}</td><td ${ed}>${todayRow.full}</td><td ${ed}>${current}</td><td ${ed} id="futuresCell">${futuresInput.value || '—'}</td><td><button class="copy-row-inline" data-row="today">Copy</button></td></tr>`;
-    html += '</tbody>';
-    sessionTable.innerHTML = html;
     sessionResultWrap.style.display = 'block';
-    sessionStatus.textContent = `Done (at ${nowStr.slice(11,16)} Tehran time). Cells are editable — CSV/Drive/Copy always use whatever is currently shown.`;
-
-    sessionTable.querySelectorAll('.copy-row-inline').forEach(btn=>{
-      btn.addEventListener('click', () => copyRow(btn.dataset.row));
-    });
+    sessionStatus.textContent = `Done (at ${nowStr.slice(11,16)} Tehran time). Cells are editable — CSV/Drive always use whatever is currently shown.`;
   }catch(err){
     sessionStatus.textContent = 'Error: ' + err.message;
   }
 });
 
-// Reads whatever is currently displayed in the session table (fetched value or a manual edit) — never the stale JS object.
-function readSessionRowFromDom(rowIndex){
-  const bodyRows = sessionTable.querySelectorAll('tbody tr');
-  const tr = bodyRows[rowIndex];
-  if(!tr) return null;
-  const c = tr.querySelectorAll('td');
-  return {
-    date: c[1].textContent.trim(), asia: c[2].textContent.trim(), london: c[3].textContent.trim(),
-    ny: c[4].textContent.trim(), full: c[5].textContent.trim(), current: c[6].textContent.trim(), futures: c[7].textContent.trim()
-  };
-}
-
-async function copyRow(which){
-  const r = readSessionRowFromDom(which === 'yesterday' ? 0 : 1);
-  if(!r) return;
-  const row = which === 'today'
-    ? [r.date, r.asia, r.london, r.ny, r.full, r.current, r.futures].join('\t')
-    : [r.date, r.asia, r.london, r.ny, r.full].join('\t');
-  try{
-    await navigator.clipboard.writeText(row);
-    copyStatus.textContent = `"${which==='today'?'Today':'Yesterday'}" row copied ✓`;
-  }catch(e){
-    copyStatus.textContent = 'Auto-copy failed; select manually: ' + row;
-  }
+// Reads whatever is currently displayed in one of the two period tables (fetched value or a manual edit).
+function readPeriodsTableFromDom(tableEl){
+  const rows = Array.from(tableEl.querySelectorAll('tbody tr'));
+  return rows.map(tr => {
+    const c = tr.querySelectorAll('td');
+    return {
+      period: c[0].textContent.trim(), start: c[1].textContent.trim(), end: c[2].textContent.trim(),
+      high: c[3].textContent.trim(), highTime: c[4].textContent.trim(),
+      low: c[5].textContent.trim(), lowTime: c[6].textContent.trim(),
+      close: c[7].textContent.trim(), futures: c[8].textContent.trim()
+    };
+  });
 }
 
 function buildSessionCsv(){
-  const y = readSessionRowFromDom(0), t = readSessionRowFromDom(1);
-  if(!y || !t) return null;
-  const header = ['Date','Asia H/L','London H/L','NY H/L','Full day H/L','Current','Futures'];
-  const rows = [
-    [y.date, y.asia, y.london, y.ny, y.full, '', ''],
-    [t.date, t.asia, t.london, t.ny, t.full, t.current, t.futures],
-  ];
-  const csv = [header.join(',')].concat(rows.map(r => r.join(','))).join('\n');
+  const yEl = document.getElementById('sessionTableYesterday');
+  const tEl = document.getElementById('sessionTableToday');
+  if(!yEl || !tEl || !yEl.querySelector('tbody')) return null;
+  const header = ['Block','Period','Start','End','High','HighTime','Low','LowTime','Close','Futures'];
+  const yRows = readPeriodsTableFromDom(yEl).map(r => ['Yesterday', r.period, r.start, r.end, r.high, r.highTime, r.low, r.lowTime, r.close, r.futures]);
+  const tRows = readPeriodsTableFromDom(tEl).map(r => ['Today', r.period, r.start, r.end, r.high, r.highTime, r.low, r.lowTime, r.close, r.futures]);
+  const csv = [header.join(',')].concat(yRows.concat(tRows).map(r => r.join(','))).join('\n');
   const now = new Date();
   const pad = n => String(n).padStart(2,'0');
   const fname = `xauusd_sessions_${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.csv`;
@@ -1946,7 +1992,10 @@ document.getElementById('dailyInterpFetchBtn').addEventListener('click', () => {
   fetchLatestReport(DAILY_REPORT_FOLDER, document.getElementById('dailyInterpBody'), document.getElementById('dailyInterpStatus'), 'md', 'bc_cache_dailyInterp', 'interpretation', null);
 });
 document.getElementById('weeklyReportFetchBtn').addEventListener('click', () => {
-  fetchLatestReport(WEEKLY_REPORT_FOLDER, document.getElementById('weeklyReportBody'), document.getElementById('weeklyReportStatus'), 'md', 'bc_cache_weeklyReport');
+  fetchLatestReport(WEEKLY_REPORT_FOLDER, document.getElementById('weeklyReportBody'), document.getElementById('weeklyReportStatus'), 'md', 'bc_cache_weeklyReport', null, 'interpretation');
+});
+document.getElementById('weeklyInterpFetchBtn').addEventListener('click', () => {
+  fetchLatestReport(WEEKLY_REPORT_FOLDER, document.getElementById('weeklyInterpBody'), document.getElementById('weeklyInterpStatus'), 'md', 'bc_cache_weeklyInterp', 'interpretation', null);
 });
 
 // Restore whatever report was last successfully loaded, so it's there immediately without a fresh click.
@@ -1965,6 +2014,11 @@ document.getElementById('weeklyReportFetchBtn').addEventListener('click', () => 
   if(i){
     renderReportInto(document.getElementById('dailyInterpBody'), i.content);
     document.getElementById('dailyInterpStatus').textContent = `Loaded "${i.filename}" (updated ${new Date(i.lastUpdated).toLocaleString()}) — from local cache. Click "Load latest interpretation" to refresh.`;
+  }
+  const wi = loadLocalCache('bc_cache_weeklyInterp');
+  if(wi){
+    renderReportInto(document.getElementById('weeklyInterpBody'), wi.content);
+    document.getElementById('weeklyInterpStatus').textContent = `Loaded "${wi.filename}" (updated ${new Date(wi.lastUpdated).toLocaleString()}) — from local cache. Click "Load latest interpretation" to refresh.`;
   }
 })();
 
@@ -2056,6 +2110,40 @@ function setupPodcast(cfg){
     });
   }
 
+  // Manual voice pick (per device, saved in this browser) — overrides the automatic gender guess entirely,
+  // since some platforms (notably Android) name voices only by locale with no gender hint at all.
+  const maleSelect = document.getElementById(cfg.maleSelectId);
+  const femaleSelect = document.getElementById(cfg.femaleSelectId);
+  function voiceOptionValue(v){ return `${v.name}|${v.lang}`; }
+  function findVoiceByValue(list, val){
+    if(!val) return null;
+    const [name, lang] = val.split('|');
+    return list.find(v => v.name === name && v.lang === lang) || null;
+  }
+  async function populateVoiceSelects(){
+    if(!maleSelect || !femaleSelect) return;
+    const voices = await getVoicesAsync();
+    const savedMale = localStorage.getItem((cfg.cacheKey||'pc') + '_voiceMale') || '';
+    const savedFemale = localStorage.getItem((cfg.cacheKey||'pc') + '_voiceFemale') || '';
+    maleSelect.innerHTML = '<option value="">Auto (best guess)</option>';
+    femaleSelect.innerHTML = '<option value="">Auto (best guess)</option>';
+    voices.forEach(v => {
+      const val = voiceOptionValue(v);
+      const label = `${v.name} — ${v.lang}`;
+      const optM = document.createElement('option'); optM.value = val; optM.textContent = label;
+      const optF = optM.cloneNode(true);
+      maleSelect.appendChild(optM);
+      femaleSelect.appendChild(optF);
+    });
+    if(savedMale) maleSelect.value = savedMale;
+    if(savedFemale) femaleSelect.value = savedFemale;
+  }
+  if(maleSelect && femaleSelect){
+    populateVoiceSelects();
+    maleSelect.addEventListener('change', () => localStorage.setItem((cfg.cacheKey||'pc') + '_voiceMale', maleSelect.value));
+    femaleSelect.addEventListener('change', () => localStorage.setItem((cfg.cacheKey||'pc') + '_voiceFemale', femaleSelect.value));
+  }
+
   if(!('speechSynthesis' in window) && voiceStatus) voiceStatus.textContent = 'This browser does not support speech synthesis.';
 
   copyBtn.addEventListener('click', async () => {
@@ -2101,6 +2189,8 @@ function setupPodcast(cfg){
   let pcPlaying = false;
   let pcLangTag = 'en-US';
   let pcVoices = {male:null, female:null, fallback:null};
+  let pcManualMale = null;
+  let pcManualFemale = null;
   let pcLastText = '';
 
   function pcHighlightAndBuildTranscript(activeIdx){
@@ -2119,7 +2209,9 @@ function setupPodcast(cfg){
     const seg = pcSegments[idx];
     const u = new SpeechSynthesisUtterance(seg.text);
     u.lang = pcLangTag;
-    if(pcVoices.male && seg.speaker==='male'){ u.voice = pcVoices.male; u.pitch = 0.9; }
+    const manualVoice = seg.speaker === 'male' ? pcManualMale : pcManualFemale;
+    if(manualVoice){ u.voice = manualVoice; u.pitch = 1.0; }
+    else if(pcVoices.male && seg.speaker==='male'){ u.voice = pcVoices.male; u.pitch = 0.9; }
     else if(pcVoices.female && seg.speaker==='female'){ u.voice = pcVoices.female; u.pitch = (pcVoices.male===pcVoices.female) ? 1.4 : 1.0; }
     else if(pcVoices.fallback){ u.voice = pcVoices.fallback; u.pitch = seg.speaker==='male' ? 0.9 : 1.3; }
     u.onend = () => { if(pcPlaying) pcSpeakFrom(idx+1); };
@@ -2146,10 +2238,25 @@ function setupPodcast(cfg){
     pcLangTag = lang === 'fa' ? 'fa-IR' : 'en-US';
     const langName = lang === 'fa' ? 'Persian' : 'English';
     voiceStatus.textContent = 'Preparing voices...';
-    pcVoices = await pickVoicesForLang(lang);
-    if(pcVoices.list.length >= 2) voiceStatus.textContent = `Using 2 ${langName} voices: ${pcVoices.list[0].name} / ${pcVoices.list[1].name}`;
-    else if(pcVoices.list.length === 1) voiceStatus.textContent = `Only 1 ${langName} voice found (${pcVoices.list[0].name}) — using pitch variation to distinguish speakers.`;
-    else voiceStatus.textContent = `No ${langName} voice found on this system — falling back to the default voice.`;
+
+    const allVoices = await getVoicesAsync();
+    pcManualMale = maleSelect ? findVoiceByValue(allVoices, maleSelect.value) : null;
+    pcManualFemale = femaleSelect ? findVoiceByValue(allVoices, femaleSelect.value) : null;
+
+    if(pcManualMale && pcManualFemale){
+      voiceStatus.textContent = `Using your selected voices: ${pcManualMale.name} / ${pcManualFemale.name}`;
+    } else {
+      pcVoices = await pickVoicesForLang(lang);
+      if(pcManualMale || pcManualFemale){
+        voiceStatus.textContent = 'Using one selected voice, auto-guessing the other.';
+      } else if(pcVoices.list.length >= 2){
+        voiceStatus.textContent = `Using 2 ${langName} voices: ${pcVoices.list[0].name} / ${pcVoices.list[1].name}`;
+      } else if(pcVoices.list.length === 1){
+        voiceStatus.textContent = `Only 1 ${langName} voice found (${pcVoices.list[0].name}) — using pitch variation, or pick voices manually above for a real difference.`;
+      } else {
+        voiceStatus.textContent = `No ${langName} voice found on this system — falling back to the default voice.`;
+      }
+    }
 
     speechSynthesis.cancel();
     pcPlaying = true;
@@ -2172,6 +2279,7 @@ setupPodcast({
   loadBtnId: 'weeklyPodcastLoadBtn', loadStatusId: 'weeklyPodcastLoadStatus',
   scriptId: 'weeklyPodcastScript', playBtnId: 'weeklyPodcastPlayBtn',
   pauseBtnId: 'weeklyPodcastPauseBtn', stopBtnId: 'weeklyPodcastStopBtn', copyBtnId: 'weeklyPodcastCopyBtn', listVoicesBtnId: 'weeklyPodcastListVoicesBtn',
+  maleSelectId: 'weeklyPodcastVoiceMale', femaleSelectId: 'weeklyPodcastVoiceFemale',
   voiceStatusId: 'weeklyPodcastVoiceStatus', transcriptId: 'weeklyPodcastTranscript',
   cacheKey: 'bc_cache_weeklyPodcast'
 });
@@ -2180,6 +2288,7 @@ setupPodcast({
   loadBtnId: 'dailyPodcastLoadBtn', loadStatusId: 'dailyPodcastLoadStatus',
   scriptId: 'dailyPodcastScript', playBtnId: 'dailyPodcastPlayBtn',
   pauseBtnId: 'dailyPodcastPauseBtn', stopBtnId: 'dailyPodcastStopBtn', copyBtnId: 'dailyPodcastCopyBtn', listVoicesBtnId: 'dailyPodcastListVoicesBtn',
+  maleSelectId: 'dailyPodcastVoiceMale', femaleSelectId: 'dailyPodcastVoiceFemale',
   voiceStatusId: 'dailyPodcastVoiceStatus', transcriptId: 'dailyPodcastTranscript',
   cacheKey: 'bc_cache_dailyPodcast'
 });
