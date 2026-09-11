@@ -1083,6 +1083,17 @@ function addDays(dateStr, n){
   dt.setUTCDate(dt.getUTCDate()+n);
   return dt.toISOString().slice(0,10);
 }
+// "Yesterday" for the daily session table should skip weekends entirely — Sat/Sun/Mon all resolve to the prior Friday.
+function getPreviousBusinessDay(dateStr){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const dow = new Date(Date.UTC(y,m-1,d)).getUTCDay(); // 0=Sun,...,6=Sat
+  let daysBack;
+  if(dow === 0) daysBack = 2;      // Sunday -> Friday
+  else if(dow === 1) daysBack = 3; // Monday -> Friday
+  else if(dow === 6) daysBack = 1; // Saturday -> Friday
+  else daysBack = 1;
+  return addDays(dateStr, -daysBack);
+}
 function fmtDMY(dateStr){
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const [y,m,d] = dateStr.split('-').map(Number);
@@ -1173,7 +1184,7 @@ sessionFetchBtn.addEventListener('click', async () => {
 
   try{
     const today = tehranDateStr(new Date());
-    const yesterday = addDays(today, -1);
+    const yesterday = getPreviousBusinessDay(today);
     const tomorrow = addDays(today, 1);
     const nowStr = nowTehranStr();
 
