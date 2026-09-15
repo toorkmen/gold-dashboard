@@ -581,6 +581,7 @@
           <span id="wlStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
         </div>
         <div class="scroll-x" id="wlResultWrap" style="display:none;margin-top:14px;">
+          <p class="hint" style="margin-bottom:6px;font-weight:600;color:var(--gold);" id="wlWeekLabel"></p>
           <table class="session-table" id="wlResultTable"></table>
         </div>
         <div class="actions" id="wlActions" style="display:none;margin-top:12px;">
@@ -904,7 +905,7 @@ processBtn.addEventListener('click', () => {
   const F = parseFloat((futuresInput.value || '').replace(/,/g,''));
   const hasFutures = Number.isFinite(F) && F > 0;
   const T = timeToExpiryYearsCT();
-  let solvedCount = 0, staleCount = 0, filteredOutCount = 0;
+  let solvedCount = 0, staleCount = 0;
 
   let mapEntries = Array.from(map.values());
 
@@ -933,12 +934,8 @@ processBtn.addEventListener('click', () => {
       allWarnings.push('Past today\'s 12:30 CT expiry — T<=0, so Black-76 IV/Delta/Gamma were not computed (left blank).');
       mapEntries.forEach(r => { r.IV='N/A'; r.Delta='N/A'; r.Gamma='N/A'; });
     }
-    // Strike-range filter: keep only strikes within ±$500 of futures (spec §9)
-    const beforeCount = mapEntries.length;
-    mapEntries = mapEntries.filter(r => Math.abs(parseFloat(r.Strike) - F) <= 500);
-    filteredOutCount = beforeCount - mapEntries.length;
   } else {
-    allWarnings.push('Futures price not found (Futures field in section 4 is empty) — Black-76 reconstruction skipped; raw Barchart IV/Delta/Gamma (mostly 0/placeholder for 0DTE) were left as-is, and the ±$500 strike filter was not applied.');
+    allWarnings.push('Futures price not found (Futures field in section 4 is empty) — Black-76 reconstruction skipped; raw Barchart IV/Delta/Gamma (mostly 0/placeholder for 0DTE) were left as-is.');
   }
 
   const header = ['Strike','OptionType','Time','Open','High','Low','Latest','Change','Bid','Ask','Volume','OpenInterest','Premium','IV','Delta','Gamma','Theta','Vega','IVSkew','ExtractedAt'];
@@ -953,7 +950,7 @@ processBtn.addEventListener('click', () => {
   finalRows = merged;
 
   if(hasFutures){
-    allWarnings.push(`Black-76: F=${F}, T=${(T*365*24).toFixed(2)}h to expiry → ${solvedCount} strike(s) solved, ${staleCount} flagged N/A (stale/arbitrage-violated), ${filteredOutCount} strike(s) outside ±$500 excluded.`);
+    allWarnings.push(`Black-76: F=${F}, T=${(T*365*24).toFixed(2)}h to expiry → ${solvedCount} strike(s) solved, ${staleCount} flagged N/A (stale/arbitrage-violated).`);
   }
 
   const onlyOptions = o.rows.length && !v.rows.length;
@@ -1547,58 +1544,81 @@ document.getElementById('wlFetchBtn').addEventListener('click', async () => {
     const today = tehranDateStr(new Date());
     const prevMonday = getLastCompletedWeekMonday(today);
     const prevFriday = addDays(prevMonday, 4);   // used only for the "Week" label (Mon–Fri)
-    const windowEnd = addDays(prevMonday, 5);    // actual cutoff = Saturday 00:30, per correction
-    const start = `${prevMonday} 00:30:00`;
-    const end = `${windowEnd} 00:30:00`;
+    const windowEnd = addDays(prevMonday, 5);    // actual cutoff = Saturday 00:30
 
     const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=15min&start_date=${encodeURIComponent(prevMonday+' 00:00:00')}&end_date=${encodeURIComponent(windowEnd+' 01:00:00')}&timezone=Asia/Tehran&apikey=${encodeURIComponent(key)}`;
     const res = await fetch(url);
     const json = await res.json();
-    if(json.status === 'error' || !json.values){ statusEl.textContent = 'API error: ' + (json.message || 'invalid response'); return; }
+    if(json.status === 'error' || !json.values || !json.values.length){ statusEl.textContent = 'API error: ' + (json.message || 'invalid response'); return; }
     const bars = json.values.map(v => ({datetime:v.datetime, high:v.high, low:v.low, close:v.close}));
+
+    const start = `${prevMonday} 00:30:00`;
+    const end = `${windowEnd} 00:30:00`;
     const inRange = bars.filter(b => b.datetime >= start && b.datetime < end);
-    let hl = '—', spotClose = '—';
+
+    let highRow = {value:'—', day:'—', time:'—'};
+    let lowRow  = {value:'—', day:'—', time:'—'};
     if(inRange.length){
-      const high = Math.max(...inRange.map(b=>parseFloat(b.high)));
-      const low = Math.min(...inRange.map(b=>parseFloat(b.low)));
-      hl = `${high.toFixed(2)}/${low.toFixed(2)}`;
-      // "last close" = the close of the last (latest-datetime) bar inside the window, not a live tick
-      let lastBar = inRange[0];
-      inRange.forEach(b => { if(b.datetime > lastBar.datetime) lastBar = b; });
-      spotClose = parseFloat(lastBar.close).toFixed(2);
+      let highBar = inRange[0], lowBar = inRange[0];
+      inRange.forEach(b => {
+        if(parseFloat(b.high) > parseFloat(highBar.high)) highBar = b;
+        if(parseFloat(b.low) < parseFloat(lowBar.low)) lowBar = b;
+      });
+      highRow = {value: parseFloat(highBar.high).toFixed(2), day: weekdayName(highBar.datetime.slice(0,10)), time: highBar.datetime.slice(11,16)};
+      lowRow  = {value: parseFloat(lowBar.low).toFixed(2),  day: weekdayName(lowBar.datetime.slice(0,10)),  time: lowBar.datetime.slice(11,16)};
     }
 
-    const futures = document.getElementById('wlFuturesInput').value.trim() || '—';
+    // Spot Close = the single latest bar we have overall — since this is run after the Saturday 00:30
+    // close, this naturally IS the last real candle before the market shut, no window filtering needed.
+    let lastBar = bars[0];
+    bars.forEach(b => { if(b.datetime > lastBar.datetime) lastBar = b; });
+    const spotRow = { value: parseFloat(lastBar.close).toFixed(2), day: weekdayName(lastBar.datetime.slice(0,10)), time: lastBar.datetime.slice(11,16) };
+
+    // Futures Close: latest value auto-detected from the 5 weekday tabs; Day/Time borrowed from Spot Close (per agreement).
+    const futuresVal = document.getElementById('wlFuturesInput').value.trim() || '—';
+    const futuresRow = { value: futuresVal, day: spotRow.day, time: spotRow.time };
+
     const weekLabel = formatWeekRangeLabel(prevMonday, prevFriday);
-    weeklyLevelsData = {weekLabel, hl, current: spotClose, futures}; // kept only as a fallback filename source
+    weeklyLevelsData = { weekLabel }; // kept only as a fallback filename source
 
     const ed = 'contenteditable="true" class="editable-cell"';
-    let html = '<thead><tr><th>Week</th><th>H/L</th><th>Spot Close</th><th>Futures Close</th></tr></thead><tbody>';
-    html += `<tr><td ${ed}>${weekLabel}</td><td ${ed}>${hl}</td><td ${ed}>${spotClose}</td><td ${ed}>${futures}</td></tr>`;
+    let html = '<thead><tr><th>Metric</th><th>Value</th><th>Day</th><th>Time (Tehran)</th></tr></thead><tbody>';
+    [['High', highRow], ['Low', lowRow], ['Spot Close', spotRow], ['Futures Close', futuresRow]].forEach(([label, r]) => {
+      html += `<tr><td class="row-tag">${label}</td><td ${ed}>${r.value}</td><td ${ed}>${r.day}</td><td ${ed}>${r.time}</td></tr>`;
+    });
     html += '</tbody>';
+
+    document.getElementById('wlWeekLabel').textContent = weekLabel;
     document.getElementById('wlResultTable').innerHTML = html;
     document.getElementById('wlResultWrap').style.display = 'block';
     document.getElementById('wlActions').style.display = 'flex';
-    statusEl.textContent = `Done — window ${prevMonday} 00:30 to ${windowEnd} 00:30 (Tehran). Spot Close = close of the last candle in that window. Cells are editable — CSV/Drive always use whatever is currently shown.`;
+    statusEl.textContent = `Done — window ${prevMonday} 00:30 to ${windowEnd} 00:30 (Tehran). Cells are editable — CSV/Drive always use whatever is currently shown.`;
   }catch(err){
     statusEl.textContent = 'Error: ' + err.message;
   }
 });
 
+function weekdayName(dateStr){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y,m-1,d)).toLocaleDateString('en-US',{weekday:'long',timeZone:'UTC'});
+}
+
 function readWeeklyLevelsFromDom(){
-  const tr = document.querySelector('#wlResultTable tbody tr');
-  if(!tr) return null;
-  const c = tr.querySelectorAll('td');
-  return { week: c[0].textContent.trim(), hl: c[1].textContent.trim(), spotClose: c[2].textContent.trim(), futures: c[3].textContent.trim() };
+  const rows = Array.from(document.querySelectorAll('#wlResultTable tbody tr'));
+  return rows.map(tr => {
+    const c = tr.querySelectorAll('td');
+    return { metric: c[0].textContent.trim(), value: c[1].textContent.trim(), day: c[2].textContent.trim(), time: c[3].textContent.trim() };
+  });
 }
 
 function buildWeeklyLevelsCsv(){
-  const r = readWeeklyLevelsFromDom();
-  if(!r) return null;
-  const header = ['Week','HighLow','SpotClose','FuturesClose'];
-  const row = [r.week, r.hl, r.spotClose, r.futures];
-  const csv = [header.join(','), row.join(',')].join('\n');
-  const fname = `weekly_levels_${(r.week || 'unknown').replace(/\s+/g,'_')}.csv`;
+  const rows = readWeeklyLevelsFromDom();
+  if(!rows.length) return null;
+  const weekLabel = (document.getElementById('wlWeekLabel').textContent.trim()) || 'unknown';
+  const header = ['Week','Metric','Value','Day','Time'];
+  const csvRows = rows.map(r => [weekLabel, r.metric, r.value, r.day, r.time]);
+  const csv = [header.join(',')].concat(csvRows.map(r=>r.join(','))).join('\n');
+  const fname = `weekly_levels_${weekLabel.replace(/\s+/g,'_')}.csv`;
   return {csv, fname};
 }
 document.getElementById('wlDownloadBtn').addEventListener('click', () => {
