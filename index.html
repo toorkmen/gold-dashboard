@@ -347,7 +347,7 @@
     <div class="field-row">
       <label for="futuresInput">Futures (final)</label>
       <input type="text" id="futuresInput" placeholder="e.g. 4471.6" style="width:160px;">
-      <span style="font-size:12px;color:var(--text-dim);">— included when you copy the "today" row</span>
+      <span style="font-size:12px;color:var(--text-dim);">— used as F in Black-76, and for the Futures/Spot Snapshot below</span>
     </div>
     <div id="futuresAutoNote" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);min-height:16px;margin-bottom:8px;"></div>
     <div class="actions" style="margin:4px 0 0;">
@@ -1110,9 +1110,15 @@ function addMinutesToDatetimeStr(dtStr, minutes){
   return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth()+1)}-${pad(dt.getUTCDate())} ${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}:${pad(dt.getUTCSeconds())}`;
 }
 
+// If the period has fully ended, computes over its whole [start,end) window.
+// If it's still in progress right now, computes a PARTIAL result over [start, now) instead of
+// returning nothing — flagged via isPartial so the row label can say "(so far)".
+// If it hasn't started yet at all, returns null (nothing to show).
 function computeHLTC(bars, start, end, nowStr){
-  if(nowStr < end) return null;
-  const inRange = bars.filter(b => b.datetime >= start && b.datetime < end);
+  if(nowStr < start) return null;
+  const isPartial = nowStr < end;
+  const effectiveEnd = isPartial ? nowStr : end;
+  const inRange = bars.filter(b => b.datetime >= start && b.datetime < effectiveEnd);
   if(inRange.length === 0) return null;
   let highBar = inRange[0], lowBar = inRange[0], lastBar = inRange[0];
   inRange.forEach(b => {
@@ -1120,10 +1126,16 @@ function computeHLTC(bars, start, end, nowStr){
     if(parseFloat(b.low) < parseFloat(lowBar.low)) lowBar = b;
     if(b.datetime > lastBar.datetime) lastBar = b;
   });
+  // For a completed period, Close Time = the true end of that last candle (start+15min).
+  // For a still-in-progress period, that candle hasn't actually closed yet — using its "end" would
+  // show a time in the FUTURE. Use the actual request moment (now) instead, which is what "close"
+  // really means here: the latest known price as of right now.
+  const closeTime = isPartial ? nowStr.slice(11,16) : addMinutesToDatetimeStr(lastBar.datetime, 15).slice(11,16);
   return {
     high: parseFloat(highBar.high), highTime: highBar.datetime.slice(11,16),
     low: parseFloat(lowBar.low), lowTime: lowBar.datetime.slice(11,16),
-    close: parseFloat(lastBar.close), closeTime: addMinutesToDatetimeStr(lastBar.datetime, 15).slice(11,16)
+    close: parseFloat(lastBar.close), closeTime,
+    isPartial
   };
 }
 const SESSION_PERIODS = [
@@ -1153,8 +1165,9 @@ function buildRow(bars, dateD, dateDplus1, nowStr){
   return SESSION_PERIODS.map(p => {
     const [start,end] = w[p.key];
     const r = computeHLTC(bars, start, end, nowStr);
+    const label = (r && r.isPartial) ? `${p.label} (so far)` : p.label;
     return {
-      key:p.key, label:p.label, start:start.slice(11,16), end:end.slice(11,16),
+      key:p.key, label, start:start.slice(11,16), end:end.slice(11,16),
       endsNextDay: end.slice(0,10) !== start.slice(0,10),
       high: r ? r.high.toFixed(2) : '—', highTime: r ? r.highTime : '—',
       low: r ? r.low.toFixed(2) : '—', lowTime: r ? r.lowTime : '—',
@@ -1172,6 +1185,8 @@ function periodsTableHtml(rows){
   html += '</tbody>';
   return html;
 }
+
+let lastSessionFetchInstant = null; // fallback time reference for the Snapshot feature, when no CT time was ever detected
 
 sessionFetchBtn.addEventListener('click', async () => {
   const key = tdApiKey.value.trim();
@@ -1201,6 +1216,7 @@ sessionFetchBtn.addEventListener('click', async () => {
     document.getElementById('sessionTableYesterday').innerHTML = periodsTableHtml(yesterdayRows);
     document.getElementById('sessionTableToday').innerHTML = periodsTableHtml(todayRows);
 
+    lastSessionFetchInstant = new Date();
     sessionResultWrap.style.display = 'block';
     sessionStatus.textContent = `Done (at ${nowStr.slice(11,16)} Tehran time). Cells are editable — CSV/Drive always use whatever is currently shown.`;
   }catch(err){
@@ -1238,16 +1254,29 @@ function ctTimeToInstant(ctHHMM, nowDate){
 
 document.getElementById('snapshotCaptureBtn').addEventListener('click', async () => {
   const statusEl = document.getElementById('snapshotStatus');
-  if(!lastFuturesCT.time){
-    statusEl.textContent = 'No futures time detected yet — paste Options or Volatility text in section 1/2 first.';
+  const futuresValStr = futuresInput.value.trim();
+  const futuresVal = parseFloat(futuresValStr.replace(/,/g,''));
+  if(!futuresValStr || !Number.isFinite(futuresVal)){
+    statusEl.textContent = 'The "Futures (final)" field is empty — paste or type a futures price first.';
     return;
   }
+
+  let instant, timeSourceNote;
+  if(lastFuturesCT.time){
+    instant = ctTimeToInstant(lastFuturesCT.time, new Date());
+    timeSourceNote = `from Barchart paste (${lastFuturesCT.time} CT)`;
+  } else if(lastSessionFetchInstant){
+    instant = lastSessionFetchInstant;
+    timeSourceNote = 'from your last "Fetch & Calculate" click — no CT time was detected, since the futures value was typed manually';
+  } else {
+    statusEl.textContent = 'No time reference available yet — either paste Options/Volatility text (gives an exact CT time), or click "Fetch & Calculate" once first (used as a fallback time for a manually-typed futures price).';
+    return;
+  }
+
   const key = tdApiKey.value.trim();
   if(!key){ statusEl.textContent = 'Enter the Twelve Data API key above first.'; return; }
   statusEl.textContent = 'Looking up the matching spot price...';
   try{
-    const now = new Date();
-    const instant = ctTimeToInstant(lastFuturesCT.time, now);
     const tehranDate = tehranDateStr(instant);
     const tFmt = new Intl.DateTimeFormat('en-US', {timeZone:'Asia/Tehran', hour:'2-digit', minute:'2-digit', hour12:false});
     const tParts = tFmt.formatToParts(instant);
@@ -1267,11 +1296,11 @@ document.getElementById('snapshotCaptureBtn').addEventListener('click', async ()
     json.values.forEach(v => { if(Math.abs(v.datetime.localeCompare(startStr)) < Math.abs(best.datetime.localeCompare(startStr))) best = v; });
     const spot = parseFloat(best.close).toFixed(2);
 
-    snapshotData = { time: tehranTime, futures: lastFuturesCT.value.toFixed(2), spot };
+    snapshotData = { time: tehranTime, futures: futuresVal.toFixed(2), spot };
     document.getElementById('snapVal_time').textContent = tehranTime;
     document.getElementById('snapVal_futures').textContent = snapshotData.futures;
     document.getElementById('snapVal_spot').textContent = spot;
-    statusEl.textContent = `Captured from Barchart paste (${lastFuturesCT.time} CT → ${tehranTime} Tehran).`;
+    statusEl.textContent = `Captured ${timeSourceNote} → ${tehranTime} Tehran.`;
   }catch(err){
     statusEl.textContent = 'Error: ' + err.message;
   }
@@ -1281,6 +1310,7 @@ function buildSessionCsv(){
   const yEl = document.getElementById('sessionTableYesterday');
   const tEl = document.getElementById('sessionTableToday');
   if(!yEl || !tEl || !yEl.querySelector('tbody')) return null;
+  const noteLine = '# Data source: Twelve Data, symbol XAU/USD, interval=15min (each High/Low/Close below is computed from 15-minute candles; times are Tehran time)';
   const header = ['Block','Period','Start','End','High','HighTime','Low','LowTime','Close','CloseTime','Futures','SpotAtTime'];
   const yRows = readPeriodsTableFromDom(yEl).map(r => ['Yesterday', r.period, r.start, r.end, r.high, r.highTime, r.low, r.lowTime, r.close, r.closeTime, '', '']);
   const tRows = readPeriodsTableFromDom(tEl).map(r => ['Today', r.period, r.start, r.end, r.high, r.highTime, r.low, r.lowTime, r.close, r.closeTime, '', '']);
@@ -1288,7 +1318,7 @@ function buildSessionCsv(){
   if(snapshotData){
     allRows.push(['Snapshot','Futures/Spot', snapshotData.time, '', '', '', '', '', '', '', snapshotData.futures, snapshotData.spot]);
   }
-  const csv = [header.join(',')].concat(allRows.map(r => r.join(','))).join('\n');
+  const csv = [noteLine, header.join(',')].concat(allRows.map(r => r.join(','))).join('\n');
   const now = new Date();
   const pad = n => String(n).padStart(2,'0');
   const fname = `xauusd_sessions_${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.csv`;
@@ -1615,9 +1645,10 @@ function buildWeeklyLevelsCsv(){
   const rows = readWeeklyLevelsFromDom();
   if(!rows.length) return null;
   const weekLabel = (document.getElementById('wlWeekLabel').textContent.trim()) || 'unknown';
+  const noteLine = '# Data source: Twelve Data, symbol XAU/USD, interval=15min (High/Low/Spot Close computed from 15-minute candles; times are Tehran time). Futures Close is manual, from the weekday Options/Volatility pastes.';
   const header = ['Week','Metric','Value','Day','Time'];
   const csvRows = rows.map(r => [weekLabel, r.metric, r.value, r.day, r.time]);
-  const csv = [header.join(',')].concat(csvRows.map(r=>r.join(','))).join('\n');
+  const csv = [noteLine, header.join(',')].concat(csvRows.map(r=>r.join(','))).join('\n');
   const fname = `weekly_levels_${weekLabel.replace(/\s+/g,'_')}.csv`;
   return {csv, fname};
 }
