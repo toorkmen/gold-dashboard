@@ -406,8 +406,10 @@
         <p class="hint">Reads the most recently modified <code>.md</code> file from the daily report folder in Google Drive and splits it into tabs by section.</p>
         <div class="actions" style="margin:0 0 12px;">
           <button id="dailyReportFetchBtn">Load latest report</button>
+          <button id="dailyReportListBtn">📋 Show all files</button>
           <span id="dailyReportStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
         </div>
+        <select id="dailyReportSelect" style="display:none;margin:0 0 12px;width:100%;max-width:480px;"><option value="">— choose a file —</option></select>
         <div id="dailyReportBody"></div>
       </section>
 
@@ -445,8 +447,10 @@
         <p class="hint">Reads the most recently modified <code>.md</code> file whose name contains "Interpretation" from the daily report folder (e.g. <code>XAUUSD-Daily-Interpretation-PreLondon-Sep8-2026.md</code>), and splits it into tabs by section, same as the main report.</p>
         <div class="actions" style="margin:0 0 12px;">
           <button id="dailyInterpFetchBtn">Load latest interpretation</button>
+          <button id="dailyInterpListBtn">📋 Show all files</button>
           <span id="dailyInterpStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
         </div>
+        <select id="dailyInterpSelect" style="display:none;margin:0 0 12px;width:100%;max-width:480px;"><option value="">— choose a file —</option></select>
         <div id="dailyInterpBody" dir="rtl" style="text-align:right;"></div>
       </section>
     </div>
@@ -609,8 +613,10 @@
         <p class="hint">Reads the most recently modified <code>.md</code> file from the weekly report folder in Google Drive and splits it into tabs by section.</p>
         <div class="actions" style="margin:0 0 12px;">
           <button id="weeklyReportFetchBtn">Load latest report</button>
+          <button id="weeklyReportListBtn">📋 Show all files</button>
           <span id="weeklyReportStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
         </div>
+        <select id="weeklyReportSelect" style="display:none;margin:0 0 12px;width:100%;max-width:480px;"><option value="">— choose a file —</option></select>
         <div id="weeklyReportBody"></div>
       </section>
 
@@ -648,8 +654,10 @@
         <p class="hint">Reads the most recently modified <code>.md</code> file whose name contains "Interpretation" from the weekly report folder, and splits it into tabs by section, same as the main report.</p>
         <div class="actions" style="margin:0 0 12px;">
           <button id="weeklyInterpFetchBtn">Load latest interpretation</button>
+          <button id="weeklyInterpListBtn">📋 Show all files</button>
           <span id="weeklyInterpStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
         </div>
+        <select id="weeklyInterpSelect" style="display:none;margin:0 0 12px;width:100%;max-width:480px;"><option value="">— choose a file —</option></select>
         <div id="weeklyInterpBody" dir="rtl" style="text-align:right;"></div>
       </section>
     </div>
@@ -741,7 +749,10 @@ function timeToExpiryYearsCT(){
   const g = t => +parts.find(p=>p.type===t).value;
   const nowMinutes = g('hour')*60 + g('minute') + g('second')/60;
   const expiryMinutes = 12*60 + 30;
-  const hoursRemaining = (expiryMinutes - nowMinutes) / 60;
+  let hoursRemaining = (expiryMinutes - nowMinutes) / 60;
+  // Past today's 12:30 CT (22:30 Tehran) cutoff — Barchart is now quoting TOMORROW's 0DTE contract,
+  // so the relevant expiry rolls forward by 24h instead of being treated as "already expired".
+  if(hoursRemaining <= 0) hoursRemaining += 24;
   return hoursRemaining / 24 / 365;
 }
 
@@ -1282,18 +1293,21 @@ document.getElementById('snapshotCaptureBtn').addEventListener('click', async ()
     const tParts = tFmt.formatToParts(instant);
     const tehranTime = `${tParts.find(p=>p.type==='hour').value}:${tParts.find(p=>p.type==='minute').value}`;
 
-    const startStr = `${tehranDate} ${tehranTime}:00`;
-    const endDate = addMinutesToDatetimeStr(startStr, 3);
-    const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1min&start_date=${encodeURIComponent(startStr)}&end_date=${encodeURIComponent(endDate)}&timezone=Asia/Tehran&apikey=${encodeURIComponent(key)}`;
+    const targetStr = `${tehranDate} ${tehranTime}:00`;
+    // Free-tier real-time data can lag by a few minutes, so a window matching the exact target
+    // minute often comes back empty — widen it to ±15 minutes and pick whichever bar is closest.
+    const queryStart = addMinutesToDatetimeStr(targetStr, -15);
+    const queryEnd = addMinutesToDatetimeStr(targetStr, 15);
+    const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1min&start_date=${encodeURIComponent(queryStart)}&end_date=${encodeURIComponent(queryEnd)}&timezone=Asia/Tehran&apikey=${encodeURIComponent(key)}`;
     const res = await fetch(url);
     const json = await res.json();
     if(json.status === 'error' || !json.values || !json.values.length){
-      statusEl.textContent = 'Could not find a matching spot candle: ' + (json.message || 'no data for that minute');
+      statusEl.textContent = 'Could not find a matching spot candle: ' + (json.message || 'no data in a ±15min window around that time');
       return;
     }
-    // pick the bar whose minute is closest to the target
+    // pick the bar whose minute is closest to the actual target (not just the widened query window)
     let best = json.values[0];
-    json.values.forEach(v => { if(Math.abs(v.datetime.localeCompare(startStr)) < Math.abs(best.datetime.localeCompare(startStr))) best = v; });
+    json.values.forEach(v => { if(Math.abs(v.datetime.localeCompare(targetStr)) < Math.abs(best.datetime.localeCompare(targetStr))) best = v; });
     const spot = parseFloat(best.close).toFixed(2);
 
     snapshotData = { time: tehranTime, futures: futuresVal.toFixed(2), spot };
@@ -2022,6 +2036,63 @@ document.getElementById('weeklyReportFetchBtn').addEventListener('click', () => 
 document.getElementById('weeklyInterpFetchBtn').addEventListener('click', () => {
   fetchLatestReport(WEEKLY_REPORT_FOLDER, document.getElementById('weeklyInterpBody'), document.getElementById('weeklyInterpStatus'), 'md', 'bc_cache_weeklyInterp', 'interpretation', null);
 });
+
+// ================= File browser (manual pick from any past file, not just "latest") =================
+function setupFileBrowser(cfg){
+  const listBtn = document.getElementById(cfg.listBtnId);
+  const select = document.getElementById(cfg.selectId);
+  const bodyEl = document.getElementById(cfg.bodyId);
+  const statusEl = document.getElementById(cfg.statusId);
+
+  listBtn.addEventListener('click', async () => {
+    statusEl.textContent = 'Loading file list...';
+    try{
+      let url = `${GAS_URL}?folder=${encodeURIComponent(cfg.folderId)}&list=true`;
+      if(cfg.ext) url += `&ext=${encodeURIComponent(cfg.ext)}`;
+      if(cfg.namelike) url += `&namelike=${encodeURIComponent(cfg.namelike)}`;
+      if(cfg.exclude) url += `&exclude=${encodeURIComponent(cfg.exclude)}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if(json.status !== 'ok'){ statusEl.textContent = 'Error: ' + (json.message || 'unknown error'); return; }
+      select.innerHTML = '<option value="">— choose a file —</option>';
+      json.files.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.name;
+        opt.textContent = `${f.name} — ${new Date(f.lastUpdated).toLocaleString()}`;
+        select.appendChild(opt);
+      });
+      select.style.display = 'block';
+      statusEl.textContent = `Found ${json.files.length} file(s) — pick one above.`;
+    }catch(e){
+      statusEl.textContent = 'Failed to reach the Drive script: ' + e.message;
+    }
+  });
+
+  select.addEventListener('change', async () => {
+    if(!select.value) return;
+    statusEl.textContent = 'Loading selected file...';
+    try{
+      const url = `${GAS_URL}?folder=${encodeURIComponent(cfg.folderId)}&filename=${encodeURIComponent(select.value)}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if(json.status !== 'ok'){ statusEl.textContent = 'Error: ' + (json.message || 'unknown error'); return; }
+      renderReportInto(bodyEl, json.content);
+      statusEl.textContent = `Loaded "${json.filename}" (updated ${new Date(json.lastUpdated).toLocaleString()}).`;
+    }catch(e){
+      statusEl.textContent = 'Failed to reach the Drive script: ' + e.message;
+    }
+  });
+}
+
+setupFileBrowser({ folderId: DAILY_REPORT_FOLDER, ext:'md', exclude:'interpretation',
+  listBtnId:'dailyReportListBtn', selectId:'dailyReportSelect', bodyId:'dailyReportBody', statusId:'dailyReportStatus' });
+setupFileBrowser({ folderId: DAILY_REPORT_FOLDER, ext:'md', namelike:'interpretation',
+  listBtnId:'dailyInterpListBtn', selectId:'dailyInterpSelect', bodyId:'dailyInterpBody', statusId:'dailyInterpStatus' });
+setupFileBrowser({ folderId: WEEKLY_REPORT_FOLDER, ext:'md', exclude:'interpretation',
+  listBtnId:'weeklyReportListBtn', selectId:'weeklyReportSelect', bodyId:'weeklyReportBody', statusId:'weeklyReportStatus' });
+setupFileBrowser({ folderId: WEEKLY_REPORT_FOLDER, ext:'md', namelike:'interpretation',
+  listBtnId:'weeklyInterpListBtn', selectId:'weeklyInterpSelect', bodyId:'weeklyInterpBody', statusId:'weeklyInterpStatus' });
+
 
 // Restore whatever report was last successfully loaded, so it's there immediately without a fresh click.
 (function restoreReportCaches(){
