@@ -1600,35 +1600,35 @@ document.getElementById('wlFetchBtn').addEventListener('click', async () => {
     const end = `${windowEnd} 00:30:00`;
     const inRange = bars.filter(b => b.datetime >= start && b.datetime < end);
 
-    let highRow = {value:'—', day:'—', time:'—'};
-    let lowRow  = {value:'—', day:'—', time:'—'};
+    let highRow = {value:'—', day:'—', time:'—', closeThen:'—'};
+    let lowRow  = {value:'—', day:'—', time:'—', closeThen:'—'};
     if(inRange.length){
       let highBar = inRange[0], lowBar = inRange[0];
       inRange.forEach(b => {
         if(parseFloat(b.high) > parseFloat(highBar.high)) highBar = b;
         if(parseFloat(b.low) < parseFloat(lowBar.low)) lowBar = b;
       });
-      highRow = {value: parseFloat(highBar.high).toFixed(2), day: weekdayName(highBar.datetime.slice(0,10)), time: highBar.datetime.slice(11,16)};
-      lowRow  = {value: parseFloat(lowBar.low).toFixed(2),  day: weekdayName(lowBar.datetime.slice(0,10)),  time: lowBar.datetime.slice(11,16)};
+      highRow = {value: parseFloat(highBar.high).toFixed(2), day: weekdayName(highBar.datetime.slice(0,10)), time: highBar.datetime.slice(11,16), closeThen: parseFloat(highBar.close).toFixed(2)};
+      lowRow  = {value: parseFloat(lowBar.low).toFixed(2),  day: weekdayName(lowBar.datetime.slice(0,10)),  time: lowBar.datetime.slice(11,16), closeThen: parseFloat(lowBar.close).toFixed(2)};
     }
 
     // Spot Close = the single latest bar we have overall — since this is run after the Saturday 00:30
     // close, this naturally IS the last real candle before the market shut, no window filtering needed.
     let lastBar = bars[0];
     bars.forEach(b => { if(b.datetime > lastBar.datetime) lastBar = b; });
-    const spotRow = { value: parseFloat(lastBar.close).toFixed(2), day: weekdayName(lastBar.datetime.slice(0,10)), time: lastBar.datetime.slice(11,16) };
+    const spotRow = { value: parseFloat(lastBar.close).toFixed(2), day: weekdayName(lastBar.datetime.slice(0,10)), time: lastBar.datetime.slice(11,16), closeThen:'—' };
 
     // Futures Close: latest value auto-detected from the 5 weekday tabs; Day/Time borrowed from Spot Close (per agreement).
     const futuresVal = document.getElementById('wlFuturesInput').value.trim() || '—';
-    const futuresRow = { value: futuresVal, day: spotRow.day, time: spotRow.time };
+    const futuresRow = { value: futuresVal, day: spotRow.day, time: spotRow.time, closeThen:'—' };
 
     const weekLabel = formatWeekRangeLabel(prevMonday, prevFriday);
     weeklyLevelsData = { weekLabel }; // kept only as a fallback filename source
 
     const ed = 'contenteditable="true" class="editable-cell"';
-    let html = '<thead><tr><th>Metric</th><th>Value</th><th>Day</th><th>Time (Tehran)</th></tr></thead><tbody>';
+    let html = '<thead><tr><th>Metric</th><th>Value</th><th>Day</th><th>Time (Tehran)</th><th>Close of that candle</th></tr></thead><tbody>';
     [['High', highRow], ['Low', lowRow], ['Spot Close', spotRow], ['Futures Close', futuresRow]].forEach(([label, r]) => {
-      html += `<tr><td class="row-tag">${label}</td><td ${ed}>${r.value}</td><td ${ed}>${r.day}</td><td ${ed}>${r.time}</td></tr>`;
+      html += `<tr><td class="row-tag">${label}</td><td ${ed}>${r.value}</td><td ${ed}>${r.day}</td><td ${ed}>${r.time}</td><td ${ed}>${r.closeThen}</td></tr>`;
     });
     html += '</tbody>';
 
@@ -1651,7 +1651,7 @@ function readWeeklyLevelsFromDom(){
   const rows = Array.from(document.querySelectorAll('#wlResultTable tbody tr'));
   return rows.map(tr => {
     const c = tr.querySelectorAll('td');
-    return { metric: c[0].textContent.trim(), value: c[1].textContent.trim(), day: c[2].textContent.trim(), time: c[3].textContent.trim() };
+    return { metric: c[0].textContent.trim(), value: c[1].textContent.trim(), day: c[2].textContent.trim(), time: c[3].textContent.trim(), closeThen: c[4].textContent.trim() };
   });
 }
 
@@ -1659,9 +1659,9 @@ function buildWeeklyLevelsCsv(){
   const rows = readWeeklyLevelsFromDom();
   if(!rows.length) return null;
   const weekLabel = (document.getElementById('wlWeekLabel').textContent.trim()) || 'unknown';
-  const noteLine = '# Data source: Twelve Data, symbol XAU/USD, interval=15min (High/Low/Spot Close computed from 15-minute candles; times are Tehran time). Futures Close is manual, from the weekday Options/Volatility pastes.';
-  const header = ['Week','Metric','Value','Day','Time'];
-  const csvRows = rows.map(r => [weekLabel, r.metric, r.value, r.day, r.time]);
+  const noteLine = '# Data source: Twelve Data, symbol XAU/USD, interval=15min (High/Low/Spot Close computed from 15-minute candles; times are Tehran time). Futures Close is manual, from the weekday Options/Volatility pastes. "Close of that candle" (High/Low rows only) is the close of that specific 15-min candle — use it to tell a wick apart from a confirmed close beyond the level.';
+  const header = ['Week','Metric','Value','Day','Time','CloseOfThatCandle'];
+  const csvRows = rows.map(r => [weekLabel, r.metric, r.value, r.day, r.time, r.closeThen]);
   const csv = [noteLine, header.join(',')].concat(csvRows.map(r=>r.join(','))).join('\n');
   const fname = `weekly_levels_${weekLabel.replace(/\s+/g,'_')}.csv`;
   return {csv, fname};
