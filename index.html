@@ -1143,8 +1143,8 @@ function computeHLTC(bars, start, end, nowStr){
   // really means here: the latest known price as of right now.
   const closeTime = isPartial ? nowStr.slice(11,16) : addMinutesToDatetimeStr(lastBar.datetime, 15).slice(11,16);
   return {
-    high: parseFloat(highBar.high), highTime: highBar.datetime.slice(11,16),
-    low: parseFloat(lowBar.low), lowTime: lowBar.datetime.slice(11,16),
+    high: parseFloat(highBar.high), highTime: highBar.datetime.slice(11,16), closeAtHigh: parseFloat(highBar.close),
+    low: parseFloat(lowBar.low), lowTime: lowBar.datetime.slice(11,16), closeAtLow: parseFloat(lowBar.close),
     close: parseFloat(lastBar.close), closeTime,
     isPartial
   };
@@ -1180,18 +1180,18 @@ function buildRow(bars, dateD, dateDplus1, nowStr){
     return {
       key:p.key, label, start:start.slice(11,16), end:end.slice(11,16),
       endsNextDay: end.slice(0,10) !== start.slice(0,10),
-      high: r ? r.high.toFixed(2) : '—', highTime: r ? r.highTime : '—',
-      low: r ? r.low.toFixed(2) : '—', lowTime: r ? r.lowTime : '—',
+      high: r ? r.high.toFixed(2) : '—', highTime: r ? r.highTime : '—', closeAtHigh: r ? r.closeAtHigh.toFixed(2) : '—',
+      low: r ? r.low.toFixed(2) : '—', lowTime: r ? r.lowTime : '—', closeAtLow: r ? r.closeAtLow.toFixed(2) : '—',
       close: r ? r.close.toFixed(2) : '—', closeTime: r ? r.closeTime : '—'
     };
   });
 }
 function periodsTableHtml(rows){
   const ed = 'contenteditable="true" class="editable-cell"';
-  let html = '<thead><tr><th>Period</th><th>Start</th><th>End</th><th>High</th><th>High Time</th><th>Low</th><th>Low Time</th><th>Close</th><th>Close Time</th></tr></thead><tbody>';
+  let html = '<thead><tr><th>Period</th><th>Start</th><th>End</th><th>High</th><th>High Time</th><th>Close @High</th><th>Low</th><th>Low Time</th><th>Close @Low</th><th>Close</th><th>Close Time</th></tr></thead><tbody>';
   rows.forEach(r => {
     const endLabel = r.endsNextDay ? `${r.end} (+1)` : r.end;
-    html += `<tr><td class="row-tag">${r.label}</td><td ${ed}>${r.start}</td><td ${ed}>${endLabel}</td><td ${ed}>${r.high}</td><td ${ed}>${r.highTime}</td><td ${ed}>${r.low}</td><td ${ed}>${r.lowTime}</td><td ${ed}>${r.close}</td><td ${ed}>${r.closeTime}</td></tr>`;
+    html += `<tr><td class="row-tag">${r.label}</td><td ${ed}>${r.start}</td><td ${ed}>${endLabel}</td><td ${ed}>${r.high}</td><td ${ed}>${r.highTime}</td><td ${ed}>${r.closeAtHigh}</td><td ${ed}>${r.low}</td><td ${ed}>${r.lowTime}</td><td ${ed}>${r.closeAtLow}</td><td ${ed}>${r.close}</td><td ${ed}>${r.closeTime}</td></tr>`;
   });
   html += '</tbody>';
   return html;
@@ -1242,9 +1242,9 @@ function readPeriodsTableFromDom(tableEl){
     const c = tr.querySelectorAll('td');
     return {
       period: c[0].textContent.trim(), start: c[1].textContent.trim(), end: c[2].textContent.trim(),
-      high: c[3].textContent.trim(), highTime: c[4].textContent.trim(),
-      low: c[5].textContent.trim(), lowTime: c[6].textContent.trim(),
-      close: c[7].textContent.trim(), closeTime: c[8].textContent.trim()
+      high: c[3].textContent.trim(), highTime: c[4].textContent.trim(), closeAtHigh: c[5].textContent.trim(),
+      low: c[6].textContent.trim(), lowTime: c[7].textContent.trim(), closeAtLow: c[8].textContent.trim(),
+      close: c[9].textContent.trim(), closeTime: c[10].textContent.trim()
     };
   });
 }
@@ -1324,13 +1324,13 @@ function buildSessionCsv(){
   const yEl = document.getElementById('sessionTableYesterday');
   const tEl = document.getElementById('sessionTableToday');
   if(!yEl || !tEl || !yEl.querySelector('tbody')) return null;
-  const noteLine = '# Data source: Twelve Data, symbol XAU/USD, interval=15min (each High/Low/Close below is computed from 15-minute candles; times are Tehran time)';
-  const header = ['Block','Period','Start','End','High','HighTime','Low','LowTime','Close','CloseTime','Futures','SpotAtTime'];
-  const yRows = readPeriodsTableFromDom(yEl).map(r => ['Yesterday', r.period, r.start, r.end, r.high, r.highTime, r.low, r.lowTime, r.close, r.closeTime, '', '']);
-  const tRows = readPeriodsTableFromDom(tEl).map(r => ['Today', r.period, r.start, r.end, r.high, r.highTime, r.low, r.lowTime, r.close, r.closeTime, '', '']);
+  const noteLine = '# Data source: Twelve Data, symbol XAU/USD, interval=15min (each High/Low/Close below is computed from 15-minute candles; times are Tehran time). CloseAtHigh/CloseAtLow = the close of that specific 15-min candle (a wick can still exceed it — use these to tell a wick apart from a confirmed close beyond a level).';
+  const header = ['Block','Period','Start','End','High','HighTime','CloseAtHigh','Low','LowTime','CloseAtLow','Close','CloseTime','Futures','SpotAtTime'];
+  const yRows = readPeriodsTableFromDom(yEl).map(r => ['Yesterday', r.period, r.start, r.end, r.high, r.highTime, r.closeAtHigh, r.low, r.lowTime, r.closeAtLow, r.close, r.closeTime, '', '']);
+  const tRows = readPeriodsTableFromDom(tEl).map(r => ['Today', r.period, r.start, r.end, r.high, r.highTime, r.closeAtHigh, r.low, r.lowTime, r.closeAtLow, r.close, r.closeTime, '', '']);
   const allRows = yRows.concat(tRows);
   if(snapshotData){
-    allRows.push(['Snapshot','Futures/Spot', snapshotData.time, '', '', '', '', '', '', '', snapshotData.futures, snapshotData.spot]);
+    allRows.push(['Snapshot','Futures/Spot', snapshotData.time, '', '', '', '', '', '', '', '', '', snapshotData.futures, snapshotData.spot]);
   }
   const csv = [noteLine, header.join(',')].concat(allRows.map(r => r.join(','))).join('\n');
   const now = new Date();
