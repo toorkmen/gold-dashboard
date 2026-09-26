@@ -319,6 +319,15 @@
     <span id="status"></span>
   </div>
 
+  <div id="underlyingMismatchBox" style="display:none;margin:16px 0;padding:14px;background:#3a1f1f;border:1px solid #a33;border-radius:8px;">
+    <p id="underlyingMismatchMsg" style="margin:0 0 10px;color:#ffb4b4;font-weight:600;"></p>
+    <div class="actions" style="margin:0;">
+      <input id="underlyingMismatchInput" type="text" placeholder="Correct futures price (e.g. 4329.0)" style="max-width:220px;">
+      <button id="underlyingMismatchSubmitBtn">Use this value</button>
+      <button id="underlyingMismatchUseImpliedBtn" style="background:#4a4a1f;">Use parity-implied value</button>
+    </div>
+  </div>
+
   <div id="warnings"></div>
 
   <section class="panel" id="preview">
@@ -888,11 +897,158 @@ function tryAutoFuturesFrom(raw, sourceName){
   }
 }
 
-processBtn.addEventListener('click', () => {
+function median(a){ const s=[...a].sort((x,y)=>x-y), n=s.length; return n%2 ? s[(n-1)/2] : (s[n/2-1]+s[n/2])/2; }
+
+// Shared pairing logic for put-call parity: given a per-row price field, group by strike, require
+// both sides priced >$1, medianize F=K+Call-Put across strikes within $30 of the first-pass median,
+// and require >=5 such near strikes. Returns null if there isn't enough data to trust the result.
+function parityFromPriceField(rows, priceField){
+  const byK = {};
+  for(const r of rows){
+    const p = parseFloat(r[priceField]);
+    if(!(p > 0)) continue;
+    (byK[r.Strike] ||= {})[r.OptionType] = p;
+  }
+  const pairs = Object.entries(byK)
+    .filter(([,v]) => v.Call > 1 && v.Put > 1)
+    .map(([k,v]) => ({k:+k, f:+k + v.Call - v.Put}));
+  if(pairs.length < 5) return null;
+  const m0 = median(pairs.map(p=>p.f));
+  const near = pairs.filter(p => Math.abs(p.k-m0) <= 30).map(p=>p.f);
+  if(near.length < 5) return null;
+  return {F: median(near), n: near.length, spread: Math.max(...near)-Math.min(...near)};
+}
+// Put-call parity implied futures price: F = K + Call_mid - Put_mid, medianized across near-the-money
+// strikes with valid two-sided quotes. Used to catch a wrong/stale manually-entered futures price —
+// including the CME rule where the weekly chain's underlying contract silently rolls to the next
+// Feb/Apr/Jun/Aug/Oct/Dec month once that month's monthly option has expired (COMEX Ch.1008).
+// Preferred source is live Bid/Ask; when the exchange is closed (or a leg has no two-sided market),
+// Barchart shows no live quotes at all, so this falls back to the last-trade ("Latest") price —
+// tagged via `source` so downstream consumers know which basis was used.
+function parityImpliedF(rows){
+  const byK = {};
+  for(const r of rows){
+    const bid = parseFloat(r.Bid), ask = parseFloat(r.Ask);
+    if(!(bid > 0 && ask >= bid)) continue;
+    (byK[r.Strike] ||= {})[r.OptionType] = (bid+ask)/2;
+  }
+  const pairs = Object.entries(byK)
+    .filter(([,v]) => v.Call > 1 && v.Put > 1)
+    .map(([k,v]) => ({k:+k, f:+k + v.Call - v.Put}));
+  if(pairs.length >= 5){
+    const m0 = median(pairs.map(p=>p.f));
+    const near = pairs.filter(p => Math.abs(p.k-m0) <= 30).map(p=>p.f);
+    if(near.length >= 5){
+      return {F: median(near), n: near.length, spread: Math.max(...near)-Math.min(...near), source:'live'};
+    }
+  }
+  const settled = parityFromPriceField(rows, 'Latest');
+  if(settled) return {...settled, source:'settlement'};
+  return null;
+}
+function checkUnderlying(rows, Fin, tol=3){
+  const p = parityImpliedF(rows);
+  if(!p) return {status:'unknown'};
+  const gap = p.F - Fin;
+  return {status: Math.abs(gap)<=tol ? 'ok' : 'mismatch', implied:p.F, gap, n:p.n, spread:p.spread, source:p.source};
+}
+// Soft, non-blocking secondary check: compares median IV of calls vs puts near the money AFTER
+// Black-76 has produced real IVs (or, for weekly, raw Barchart IVs). A >2x ratio either way can flag
+// a wrong underlying that slipped past the parity check, or simply a genuinely skewed/thin market —
+// hence "warn", never a hard stop. Explicit IV=0 is excluded (a placeholder, not a real reading), and
+// when fewer than `minPairs` real IVs remain on either side the ratio isn't trustworthy, so this
+// reports "insufficient" rather than silently defaulting to "ok".
+function checkIVSkewSanity(rows, F, bandDollars=25, ratioThreshold=2, minPairs=3){
+  const near = rows.filter(r => Math.abs(parseFloat(r.Strike)-F) <= bandDollars);
+  const validIV = r => r.IV !== 'N/A' && Number.isFinite(parseFloat(r.IV)) && parseFloat(r.IV) > 0;
+  const callIVs = near.filter(r=>r.OptionType==='Call' && validIV(r)).map(r=>parseFloat(r.IV));
+  const putIVs = near.filter(r=>r.OptionType==='Put' && validIV(r)).map(r=>parseFloat(r.IV));
+  if(callIVs.length < minPairs || putIVs.length < minPairs) return {status:'insufficient', nCall:callIVs.length, nPut:putIVs.length};
+  const medCall = median(callIVs), medPut = median(putIVs);
+  const ratio = Math.max(medCall/medPut, medPut/medCall);
+  return {status: ratio >= ratioThreshold ? 'warn' : 'ok', medCall, medPut, ratio};
+}
+
+// Returns the CME trading day's current time-of-day in Chicago, as a Date whose getHours()/getMinutes()
+// are meaningful — built via America/Chicago so DST is handled automatically, never a fixed offset.
+function nowInChicagoAsLocalParts(){
+  const fmt = new Intl.DateTimeFormat('en-US', {timeZone:'America/Chicago', hour:'2-digit', minute:'2-digit', hour12:false});
+  const parts = fmt.formatToParts(new Date());
+  const g = t => +parts.find(p=>p.type===t).value;
+  return {hours: g('hour'), minutes: g('minute')};
+}
+
+// Barchart's "Time" column: "HH:MM CT" if the leg traded today's CME session, or a date (MM/DD/YY) if
+// it last traded on an earlier session. The CME trading day starts 17:00 CT the evening before, so a
+// time like "23:29 CT" can be "last night" and still count as "today" — the wraparound below handles that.
+// Returns age in minutes, or null when a date was shown (definitely not traded in the current session).
+function lastTradeAgeMin(timeStr, nowChicago){
+  const m = /^(\d{1,2}):(\d{2})\s*CT$/i.exec(String(timeStr).trim());
+  if(!m) return null;
+  const tradeMin = (+m[1])*60 + (+m[2]);
+  const nowMin = nowChicago.hours*60 + nowChicago.minutes;
+  let age = nowMin - tradeMin;
+  if(age < 0) age += 24*60;
+  return age;
+}
+
+// Picks which price to feed into Black-76 for a single leg: the live "Latest" print when it's fresh
+// and sits inside the current bid/ask, otherwise the bid/ask midpoint — this avoids feeding an
+// hours-old (or prior-session) trade price into the IV solver, which otherwise produces wildly wrong IV.
+function chooseIVPrice(leg, ageMin, freshThresholdMin){
+  const bid = parseFloat(leg.Bid), ask = parseFloat(leg.Ask), latest = parseFloat(leg.Latest);
+  const isFresh = ageMin !== null && ageMin <= freshThresholdMin;
+  const validSpread = bid > 0 && ask >= bid;
+  if(isFresh && Number.isFinite(latest) && validSpread && latest >= bid && latest <= ask){
+    return {price: latest, source: 'latest', fresh: true, ageMin};
+  }
+  if(validSpread){
+    return {price: (bid+ask)/2, source: 'mid', fresh: isFresh, ageMin};
+  }
+  return {price: null, source: 'none', fresh: isFresh, ageMin};
+}
+const FRESH_THRESHOLD_MIN = 30; // adjustable staleness cutoff
+
+// For a group of rows sharing one expiry: the Call strike whose Delta is closest to 0.5 (raw Barchart
+// Delta, since weekly does not run its own Black-76) — should sit near that expiry's true underlying.
+function findDelta50Strike(rows){
+  const calls = rows.filter(r => r.OptionType==='Call' && Number.isFinite(parseFloat(r.Delta)));
+  if(!calls.length) return null;
+  let best = calls[0], bestDiff = Math.abs(parseFloat(calls[0].Delta)-0.5);
+  calls.forEach(r => { const d = Math.abs(parseFloat(r.Delta)-0.5); if(d < bestDiff){ bestDiff = d; best = r; } });
+  return parseFloat(best.Strike);
+}
+// Catches a leg whose raw Barchart IV is exactly 0 (a placeholder, not a real zero) while its Delta
+// is a plausible, non-boundary value — the signature of Greeks computed off a stale/wrong underlying
+// reference. Unlike checkIVSkewSanity this needs no reference price, so it runs unconditionally.
+function checkZeroIVWithRealDelta(rows){
+  return rows.some(r => {
+    const iv = parseFloat(r.IV), d = parseFloat(r.Delta);
+    return iv === 0 && Number.isFinite(d) && Math.abs(d) >= 0.05 && Math.abs(d) <= 0.95;
+  });
+}
+
+document.getElementById('underlyingMismatchSubmitBtn').addEventListener('click', () => {
+  const val = document.getElementById('underlyingMismatchInput').value.trim();
+  if(!val) return;
+  futuresInput.value = val;
+  document.getElementById('underlyingMismatchBox').style.display = 'none';
+  runProcessing();
+});
+document.getElementById('underlyingMismatchUseImpliedBtn').addEventListener('click', function(){
+  const implied = this.dataset.implied;
+  if(!implied) return;
+  futuresInput.value = implied;
+  document.getElementById('underlyingMismatchBox').style.display = 'none';
+  runProcessing();
+});
+
+function runProcessing(){
   statusEl.textContent = 'Processing...';
   downloadBtn.style.display = 'none';
   warningsEl.style.display = 'none';
   previewSection.style.display = 'none';
+  document.getElementById('underlyingMismatchBox').style.display = 'none';
 
   const o = parseOptions(optionsInput.value);
   const v = parseVol(volInput.value);
@@ -920,42 +1076,84 @@ processBtn.addEventListener('click', () => {
 
   let mapEntries = Array.from(map.values());
 
+  // ---- Underlying-contract sanity check (put-call parity), BEFORE Black-76 runs ----
+  let underlyingCheck = {status:'unknown'};
+  if(hasFutures){
+    underlyingCheck = checkUnderlying(mapEntries, F, 3);
+    if(underlyingCheck.status === 'mismatch'){
+      const box = document.getElementById('underlyingMismatchBox');
+      const msg = document.getElementById('underlyingMismatchMsg');
+      const useImpliedBtn = document.getElementById('underlyingMismatchUseImpliedBtn');
+      msg.textContent = `Chain's implied underlying is about ${underlyingCheck.implied.toFixed(1)}, but the entered F is ${F.toFixed(1)} (gap ${underlyingCheck.gap.toFixed(1)}). The chain is likely priced on the next contract month. Please enter that contract's futures price.`;
+      useImpliedBtn.dataset.implied = underlyingCheck.implied.toFixed(2);
+      box.style.display = 'block';
+      statusEl.textContent = 'Stopped — underlying contract mismatch (see message above the warnings box).';
+      return; // hard stop — no CSV built until this is resolved
+    }
+    if(underlyingCheck.status === 'unknown'){
+      allWarnings.push('Underlying-contract check: fewer than 5 strikes had valid two-sided quotes, so F could not be verified against the chain — continuing with the entered futures price as-is.');
+    }
+  }
+
   if(hasFutures){
     if(T > 0){
+      const nowChicago = nowInChicagoAsLocalParts();
       mapEntries.forEach(r => {
-        const price = parseFloat(r.Latest);
-        if(Number.isFinite(price) && price > 0){
+        const ageMin = lastTradeAgeMin(r.Time, nowChicago);
+        const picked = chooseIVPrice(r, ageMin, FRESH_THRESHOLD_MIN);
+        r.Fresh = picked.fresh ? 'true' : 'false';
+        r.LastTradeAgeMin = ageMin !== null ? String(ageMin) : '';
+        r.VolumeToday = ageMin !== null ? (r.Volume !== undefined ? r.Volume : '') : '0';
+
+        if(picked.price !== null){
           const K = parseFloat(r.Strike);
-          const iv = impliedVol76(price, F, K, T, r.OptionType);
+          const iv = impliedVol76(picked.price, F, K, T, r.OptionType);
           if(iv !== null){
             const g = black76Greeks(F, K, T, iv, r.OptionType);
             r.IV = iv.toFixed(4);
             r.Delta = g.delta.toFixed(4);
             r.Gamma = g.gamma.toFixed(6);
+            r.IVSource = picked.source;
             solvedCount++;
           } else {
-            r.IV = 'N/A'; r.Delta = 'N/A'; r.Gamma = 'N/A';
+            r.IV = 'N/A'; r.Delta = 'N/A'; r.Gamma = 'N/A'; r.IVSource = picked.source;
             staleCount++;
           }
         } else {
-          r.IV = 'N/A'; r.Delta = 'N/A'; r.Gamma = 'N/A';
+          r.IV = 'N/A'; r.Delta = 'N/A'; r.Gamma = 'N/A'; r.IVSource = 'none';
         }
       });
+      const skewCheck = checkIVSkewSanity(mapEntries, F, 25, 2);
+      if(skewCheck.status === 'warn'){
+        allWarnings.push(`Possible wrong underlying: near-the-money median IV differs >2x between calls (${(skewCheck.medCall*100).toFixed(1)}%) and puts (${(skewCheck.medPut*100).toFixed(1)}%) — worth a second look even though the parity check passed.`);
+      }
     } else {
       allWarnings.push('Past today\'s 12:30 CT expiry — T<=0, so Black-76 IV/Delta/Gamma were not computed (left blank).');
-      mapEntries.forEach(r => { r.IV='N/A'; r.Delta='N/A'; r.Gamma='N/A'; });
+      mapEntries.forEach(r => { r.IV='N/A'; r.Delta='N/A'; r.Gamma='N/A'; r.IVSource=''; r.Fresh=''; r.LastTradeAgeMin=''; r.VolumeToday=''; });
     }
   } else {
     allWarnings.push('Futures price not found (Futures field in section 4 is empty) — Black-76 reconstruction skipped; raw Barchart IV/Delta/Gamma (mostly 0/placeholder for 0DTE) were left as-is.');
   }
 
-  const header = ['Strike','OptionType','Time','Open','High','Low','Latest','Change','Bid','Ask','Volume','OpenInterest','Premium','IV','Delta','Gamma','Theta','Vega','IVSkew','ExtractedAt'];
+  const header = ['Strike','OptionType','Time','Open','High','Low','Latest','Change','Bid','Ask','Volume','OpenInterest','Premium','IV','Delta','Gamma','Theta','Vega','IVSkew','ExtractedAt','Fresh','LastTradeAgeMin','IVSource','VolumeToday','FuturesUsed','ParityImpliedF','ParityGap','ParitySpread','ParitySource','UnderlyingCheck'];
   const snapshotTime = nowTehranStr(); // when THIS file was generated (Tehran time) — distinct from each row's own last-trade "Time"
+  const extraCols = {
+    FuturesUsed: hasFutures ? F.toFixed(2) : '',
+    ParityImpliedF: underlyingCheck.implied !== undefined ? underlyingCheck.implied.toFixed(2) : '',
+    ParityGap: underlyingCheck.gap !== undefined ? underlyingCheck.gap.toFixed(2) : '',
+    ParitySpread: underlyingCheck.spread !== undefined ? underlyingCheck.spread.toFixed(2) : '',
+    ParitySource: underlyingCheck.source || '',
+    UnderlyingCheck: underlyingCheck.status
+  };
   const merged = mapEntries.sort((a,b)=>{
     const sa=parseFloat(a.Strike), sb=parseFloat(b.Strike);
     if(sa!==sb) return sa-sb;
     return a.OptionType.localeCompare(b.OptionType);
-  }).map(r => header.map(h => h==='ExtractedAt' ? snapshotTime : (r[h] !== undefined ? r[h] : '')));
+  }).map(r => header.map(h => {
+    if(h==='ExtractedAt') return snapshotTime;
+    if(extraCols[h] !== undefined) return extraCols[h];
+    return r[h] !== undefined ? r[h] : '';
+  }));
 
   finalHeader = header;
   finalRows = merged;
@@ -985,7 +1183,8 @@ processBtn.addEventListener('click', () => {
   html += '</tbody>';
   previewTable.innerHTML = html;
   previewSection.style.display = 'block';
-});
+}
+processBtn.addEventListener('click', runProcessing);
 
 function buildMergedCsv(){
   if(!finalRows) return null;
@@ -1416,7 +1615,7 @@ function formatWeekRangeLabel(mondayStr, fridayStr){
   return `${m1[2]}${months[m1[1]-1]}-${m2[2]}${months[m2[1]-1]} ${m2[0]}`;
 }
 
-let weeklyFinalHeader = null, weeklyFinalRows = null, weeklyMondayDate = null, weeklyFridayDate = null;
+let weeklyFinalHeader = null, weeklyFinalRows = null, weeklyMondayDate = null, weeklyFridayDate = null, weeklyMetaLines = [];
 
 document.getElementById('weeklyProcessBtn').addEventListener('click', () => {
   const statusEl = document.getElementById('weeklyStatus');
@@ -1430,6 +1629,7 @@ document.getElementById('weeklyProcessBtn').addEventListener('click', () => {
   const allWarnings = [];
   let allRows = [];
   let anyDay = false;
+  const nowChicago = nowInChicagoAsLocalParts();
 
   WEEKDAYS.forEach(day => {
     const optRaw = document.querySelector(`.wd-options[data-day="${day}"]`).value;
@@ -1454,13 +1654,61 @@ document.getElementById('weeklyProcessBtn').addEventListener('click', () => {
       map.set(key, {...existing, IV:r.IV, Delta:r.Delta, Gamma:r.Gamma, Theta:r.Theta, Vega:r.Vega, IVSkew:r.IVSkew});
     });
     Array.from(map.values()).forEach(r => {
-      allRows.push({...r, ExpiryDay:day, ExpiryDate:dateVal, ExpiryType:typeVal});
+      const ageMin = lastTradeAgeMin(r.Time, nowChicago);
+      allRows.push({
+        ...r, ExpiryDay:day, ExpiryDate:dateVal, ExpiryType:typeVal,
+        Fresh: (ageMin !== null && ageMin <= FRESH_THRESHOLD_MIN) ? 'true' : 'false',
+        LastTradeAgeMin: ageMin !== null ? String(ageMin) : '',
+        IVSource: 'barchart_raw',
+        VolumeToday: ageMin !== null ? (r.Volume !== undefined ? r.Volume : '') : '0'
+      });
     });
   });
 
   if(!anyDay){ statusEl.textContent = 'No days filled in yet.'; return; }
 
-  const header = ['ExpiryDay','ExpiryDate','ExpiryType','Strike','OptionType','Time','Open','High','Low','Latest','Change','Bid','Ask','Volume','OpenInterest','Premium','IV','Delta','Gamma','Theta','Vega','IVSkew'];
+  // ---- Per-expiry underlying-contract check (non-blocking — the week can legitimately span two
+  // futures contracts, e.g. Mon–Thu on GCV and Fri on GCZ once the monthly option has expired) ----
+  const wFin = parseFloat((document.getElementById('wlFuturesInput').value || '').replace(/,/g,''));
+  const hasWFutures = Number.isFinite(wFin) && wFin > 0;
+  const byExpiry = {};
+  allRows.forEach(r => { (byExpiry[r.ExpiryDate || r.ExpiryDay] ||= []).push(r); });
+  const expiryChecks = {};
+  const expirySummaryLines = [];
+  Object.entries(byExpiry).forEach(([expiry, rows]) => {
+    let check = {status:'unknown'};
+    if(hasWFutures) check = checkUnderlying(rows, wFin, 3);
+    const d50 = findDelta50Strike(rows);
+
+    // GreeksSuspect is independent of a successful parity check (a closed-market/no-live-quote day
+    // can leave parity "unknown" while the raw Greeks are still visibly wrong) — each condition below
+    // stands on its own:
+    let greeksSuspect = false;
+    // (a) IV printed as exactly 0 on a leg with a real, non-boundary Delta — needs no reference price.
+    if(checkZeroIVWithRealDelta(rows)) greeksSuspect = true;
+    // (b)/(c) need *some* reference price: prefer the parity-implied F, else fall back to the
+    // entered futures price, so these still run even when parity itself came back "unknown".
+    const refF = check.implied !== undefined ? check.implied : (hasWFutures ? wFin : null);
+    let skew = {status:'unknown'};
+    if(refF !== null){
+      skew = checkIVSkewSanity(rows, refF, 25, 2, 3);
+      if(skew.status === 'warn') greeksSuspect = true;
+      if(d50 !== null && Math.abs(d50 - refF) > 15) greeksSuspect = true;
+    }
+
+    expiryChecks[expiry] = {...check, delta50Strike: d50, greeksSuspect, futuresUsed: hasWFutures ? wFin.toFixed(2) : ''};
+    if(check.status === 'mismatch'){
+      allWarnings.push(`Expiry ${expiry}: implied underlying ≈${check.implied.toFixed(1)} (from ${check.source}) vs entered F ${wFin.toFixed(1)} (gap ${check.gap.toFixed(1)}) — this expiry may be priced on a different futures contract.`);
+    }
+    if(greeksSuspect){
+      allWarnings.push(`Expiry ${expiry}: raw Barchart Greeks look suspect (zero IV on a real-delta leg, IV skew, or delta-0.5 strike far from the reference price) — treat IV/Delta/Gamma for this expiry with caution.`);
+    }
+    expirySummaryLines.push(`# Expiry ${expiry}: ParityImpliedF=${check.implied !== undefined ? check.implied.toFixed(2) : 'unknown'}, ParitySource=${check.source || ''}, FuturesUsed=${hasWFutures ? wFin.toFixed(2) : ''}, UnderlyingCheck=${check.status}${greeksSuspect ? ', GreeksSuspect=true' : ''}`);
+  });
+  weeklyMetaLines = ['# Data source: Twelve Data / Barchart. Per-expiry underlying check uses put-call parity; times are Tehran unless noted CT.'].concat(expirySummaryLines);
+
+  const header = ['ExpiryDay','ExpiryDate','ExpiryType','Strike','OptionType','Time','Open','High','Low','Latest','Change','Bid','Ask','Volume','OpenInterest','Premium','IV','Delta','Gamma','Theta','Vega','IVSkew',
+    'Fresh','LastTradeAgeMin','IVSource','VolumeToday','Expiry','ParityImpliedF','ParityGap','ParitySpread','ParitySource','FuturesUsed','UnderlyingCheck','GreeksSuspect','Delta50Strike'];
   allRows.sort((a,b)=>{
     const order = WEEKDAYS.indexOf(a.ExpiryDay) - WEEKDAYS.indexOf(b.ExpiryDay);
     if(order!==0) return order;
@@ -1469,7 +1717,22 @@ document.getElementById('weeklyProcessBtn').addEventListener('click', () => {
     return a.OptionType.localeCompare(b.OptionType);
   });
   weeklyFinalHeader = header;
-  weeklyFinalRows = allRows.map(r => header.map(h => r[h]!==undefined ? r[h] : ''));
+  weeklyFinalRows = allRows.map(r => {
+    const expiry = r.ExpiryDate || r.ExpiryDay;
+    const chk = expiryChecks[expiry] || {status:'unknown'};
+    const rowExtra = {
+      Expiry: expiry,
+      ParityImpliedF: chk.implied !== undefined ? chk.implied.toFixed(2) : '',
+      ParityGap: chk.gap !== undefined ? chk.gap.toFixed(2) : '',
+      ParitySpread: chk.spread !== undefined ? chk.spread.toFixed(2) : '',
+      ParitySource: chk.source || '',
+      FuturesUsed: chk.futuresUsed || '',
+      UnderlyingCheck: chk.status,
+      GreeksSuspect: chk.greeksSuspect ? 'true' : 'false',
+      Delta50Strike: chk.delta50Strike !== null && chk.delta50Strike !== undefined ? chk.delta50Strike : ''
+    };
+    return header.map(h => rowExtra[h] !== undefined ? rowExtra[h] : (r[h] !== undefined ? r[h] : ''));
+  });
 
   if(allWarnings.length){ warningsEl.textContent = allWarnings.join('\n'); warningsEl.style.display = 'block'; }
   statusEl.textContent = `${weeklyFinalRows.length} row(s) across the week ready.`;
@@ -1506,7 +1769,8 @@ function formatWeekRangeShort(mondayStr, fridayStr){
 
 function buildWeeklyCsv(){
   if(!weeklyFinalRows) return null;
-  const csv = [weeklyFinalHeader.join(',')].concat(
+  const metaBlock = (weeklyMetaLines && weeklyMetaLines.length) ? weeklyMetaLines.join('\n') + '\n' : '';
+  const csv = metaBlock + [weeklyFinalHeader.join(',')].concat(
     weeklyFinalRows.map(r => r.map(c=>{
       const s=String(c);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
