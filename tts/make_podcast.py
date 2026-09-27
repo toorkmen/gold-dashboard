@@ -42,7 +42,8 @@ GEMINI_MODELS = [m.strip() for m in (os.environ.get("GEMINI_MODEL") or
                  "gemini-3.8-flash-tts,gemini-3.8-flash-lite-tts").split(",") if m.strip()]
 GEMINI_MALE = os.environ.get("GEMINI_MALE_VOICE") or "Charon"    # "Informative"
 GEMINI_FEMALE = os.environ.get("GEMINI_FEMALE_VOICE") or "Kore"  # "Firm"
-GEMINI_STYLE = os.environ.get("GEMINI_STYLE") or "clear, calm and informative podcast narration"
+GEMINI_STYLE = os.environ.get("GEMINI_STYLE") or (
+    "relaxed, conversational podcast between two friends; natural, lively intonation; moderate pace")
 CHUNK_CHARS = int(os.environ.get("CHUNK_CHARS") or "6000")
 # Truncation guard: Persian speech runs ~12-16 characters per second. A chunk whose audio is
 # much shorter than chars/25 seconds was cut off by the model -> split it in two and retry.
