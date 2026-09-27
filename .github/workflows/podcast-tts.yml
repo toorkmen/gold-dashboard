@@ -1,0 +1,54 @@
+name: Podcast MP3 (Gemini / Farid-Dilara)
+
+on:
+  # Triggered by the dashboard's "Make MP3" button, through Apps Script.
+  repository_dispatch:
+    types: [podcast-tts]
+  # Manual test: Actions tab -> this workflow -> "Run workflow".
+  workflow_dispatch:
+    inputs:
+      text:
+        description: 'Test script ("\n" = new line)'
+        required: true
+        default: 'آقا: سلام، به تحلیل هفتگی طلا خوش آمدید. این یک آزمایش است.\nخانم: سلام. اگر این را واضح و درست می‌شنوید، یعنی همه‌چیز کار می‌کند.'
+      engine:
+        description: 'auto = one MP3 per engine, to compare'
+        type: choice
+        options: [auto, gemini, microsoft]
+        default: auto
+
+concurrency:
+  group: podcast-tts-${{ github.event.client_payload.job || github.run_id }}
+
+jobs:
+  tts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install tools
+        run: |
+          pip install edge-tts requests
+          command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+
+      - name: Build MP3
+        env:
+          GAS_URL: ${{ secrets.GAS_URL }}
+          TTS_SECRET: ${{ secrets.TTS_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          JOB_ID: ${{ github.event.client_payload.job }}
+          SCRIPT_TEXT: ${{ github.event.inputs.text }}
+          TTS_ENGINE: ${{ github.event.inputs.engine || 'auto' }}
+        run: python tts/make_podcast.py
+
+      - name: Keep the test MP3s
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: podcast-test
+          path: out/*.mp3
