@@ -44,6 +44,11 @@ GEMINI_MALE = os.environ.get("GEMINI_MALE_VOICE") or "Charon"    # "Informative"
 GEMINI_FEMALE = os.environ.get("GEMINI_FEMALE_VOICE") or "Kore"  # "Firm"
 GEMINI_STYLE = os.environ.get("GEMINI_STYLE") or (
     "relaxed, conversational podcast between two friends; natural, lively intonation; moderate pace")
+# The man gets his own delivery note (the woman's, above, is the one that already sounds right).
+GEMINI_MALE_STYLE = os.environ.get("GEMINI_MALE_STYLE") or (
+    "relaxed, conversational podcast between two friends; warm, engaged and unhurried; genuinely "
+    "interested in the conversation; relaxed, slightly slower pace; friendly intonation")
+STYLE = {"male": GEMINI_MALE_STYLE, "female": GEMINI_STYLE}
 CHUNK_CHARS = int(os.environ.get("CHUNK_CHARS") or "6000")
 # Truncation guard: Persian speech runs ~12-16 characters per second. A chunk whose audio is
 # much shorter than chars/25 seconds was cut off by the model -> split it in two and retry.
@@ -312,7 +317,7 @@ def _gemini_bodies(model, turns):
         "model": model,
         "input": [{"type": "user_input", "content": [
             {"type": "text", "text": t,
-             "annotations": [{"type": "speech_metadata", "speaker": names[s], "style": GEMINI_STYLE}]}
+             "annotations": [{"type": "speech_metadata", "speaker": names[s], "style": STYLE[s]}]}
             for s, t in turns]}],
         "response_format": {"type": "audio"},
         "generation_config": {"speech_config": {"mode": "conversational", "speakers": [
@@ -320,7 +325,7 @@ def _gemini_bodies(model, turns):
     }
     legacy = {
         "contents": [{"role": "user", "parts": [
-            {"text": t, "speech_metadata": {"speaker": names[s], "style": GEMINI_STYLE}} for s, t in turns]}],
+            {"text": t, "speech_metadata": {"speaker": names[s], "style": STYLE[s]}} for s, t in turns]}],
         "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"multiSpeakerVoiceConfig": {
             "speakerVoiceConfigs": [
                 {"speaker": "Man", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_MALE}}},
