@@ -426,37 +426,31 @@
 
       <section class="panel">
         <h2>Daily Podcast</h2>
-        <p class="hint">Loads the latest podcast script (a <code>.txt</code> file, lines starting with <code>Man:</code>/<code>Woman:</code> or <code>آقا:</code>/<code>خانم:</code>) from the same daily report folder, then plays it with two browser voices.</p>
+        <p class="hint">Loads the latest podcast script (a <code>.txt</code> file, lines starting with <code>Man:</code>/<code>Woman:</code> or <code>آقا:</code>/<code>خانم:</code>) from the same daily report folder. "Make MP3" turns it into audio in the cloud.</p>
         <div class="actions" style="margin:0 0 12px;">
           <button id="dailyPodcastLoadBtn">Load latest script</button>
           <span id="dailyPodcastLoadStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
         </div>
         <textarea id="dailyPodcastScript" placeholder="Script will appear here after loading — or paste one manually." style="min-height:160px;"></textarea>
         <div class="actions" style="margin-top:10px;">
-          <button id="dailyPodcastPlayBtn">▶ Play</button>
-          <button id="dailyPodcastPauseBtn">⏸ Pause</button>
-          <button id="dailyPodcastStopBtn">⏹ Stop</button>
           <button id="dailyPodcastCopyBtn" style="background:var(--gold);color:#1a1409;">📋 Copy full script</button>
-          <button id="dailyPodcastListVoicesBtn">🔍 List available voices</button>
-          <span id="dailyPodcastVoiceStatus" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);"></span>
-        </div>
-        <div class="field-row" style="margin-top:8px;">
-          <label>Voice — Man/آقا</label>
-          <select id="dailyPodcastVoiceMale" style="flex:1;min-width:180px;"><option value="">Auto (best guess)</option></select>
-          <label style="margin-inline-start:12px;">Voice — Woman/خانم</label>
-          <select id="dailyPodcastVoiceFemale" style="flex:1;min-width:180px;"><option value="">Auto (best guess)</option></select>
         </div>
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
-          <p class="hint" style="margin:0 0 8px;">MP3 read word for word by Gemini's voices (Charon for <code>آقا:</code>/Man, Kore for <code>خانم:</code>/Woman). If Gemini's free daily quota is used up, it is built with Microsoft's Farid/Dilara instead. Built in the cloud (GitHub) and saved next to the script in Drive; takes about 1–5 minutes.</p>
+          <p class="hint" style="margin:0 0 8px;">MP3 read word for word by Gemini's voices (Charon for <code>آقا:</code>/Man, Kore for <code>خانم:</code>/Woman). If Gemini's free daily quota runs out part-way, Microsoft's Farid / Dilara read the rest — still one MP3. Built in the cloud (GitHub) and kept in Drive for 2 days. A daily podcast takes a few minutes; a long weekly one can take up to about 40 minutes. Playback starts while the file is still downloading.</p>
           <div class="actions" style="margin:0;">
             <button id="dailyPodcastMp3MakeBtn">🎙 Make MP3</button>
             <button id="dailyPodcastMp3LoadBtn">🎧 Load latest MP3</button>
+            <label style="font-family:var(--sans);font-size:13px;color:var(--text-dim);">Speed
+              <select id="dailyPodcastSpeed" style="margin-inline-start:4px;">
+                <option value="1">1×</option><option value="1.1">1.1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option>
+              </select>
+            </label>
             <a id="dailyPodcastMp3Download" style="display:none;font-family:var(--sans);font-size:13px;font-weight:600;padding:7px 16px;border-radius:6px;background:var(--panel-2);color:var(--text);text-decoration:none;border:1px solid var(--border);">⬇ Download MP3</a>
           </div>
           <div id="dailyPodcastMp3Status" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);margin-top:8px;min-height:16px;"></div>
           <audio id="dailyPodcastAudio" controls preload="none" style="display:none;width:100%;margin-top:8px;"></audio>
+          <div id="dailyPodcastMp3Note" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);margin-top:6px;"></div>
         </div>
-        <div id="dailyPodcastTranscript" class="md-body" style="margin-top:14px;"></div>
       </section>
     </div>
 
@@ -690,37 +684,31 @@
 
       <section class="panel">
         <h2>Weekly Podcast</h2>
-        <p class="hint">Loads the latest podcast script (a <code>.txt</code> file, lines starting with <code>Man:</code>/<code>Woman:</code> or <code>آقا:</code>/<code>خانم:</code>) from the same weekly report folder, then plays it with two browser voices.</p>
+        <p class="hint">Loads the latest podcast script (a <code>.txt</code> file, lines starting with <code>Man:</code>/<code>Woman:</code> or <code>آقا:</code>/<code>خانم:</code>) from the same weekly report folder. "Make MP3" turns it into audio in the cloud.</p>
         <div class="actions" style="margin:0 0 12px;">
           <button id="weeklyPodcastLoadBtn">Load latest script</button>
           <span id="weeklyPodcastLoadStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
         </div>
         <textarea id="weeklyPodcastScript" placeholder="Script will appear here after loading — or paste one manually." style="min-height:160px;"></textarea>
         <div class="actions" style="margin-top:10px;">
-          <button id="weeklyPodcastPlayBtn">▶ Play</button>
-          <button id="weeklyPodcastPauseBtn">⏸ Pause</button>
-          <button id="weeklyPodcastStopBtn">⏹ Stop</button>
           <button id="weeklyPodcastCopyBtn" style="background:var(--gold);color:#1a1409;">📋 Copy full script</button>
-          <button id="weeklyPodcastListVoicesBtn">🔍 List available voices</button>
-          <span id="weeklyPodcastVoiceStatus" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);"></span>
-        </div>
-        <div class="field-row" style="margin-top:8px;">
-          <label>Voice — Man/آقا</label>
-          <select id="weeklyPodcastVoiceMale" style="flex:1;min-width:180px;"><option value="">Auto (best guess)</option></select>
-          <label style="margin-inline-start:12px;">Voice — Woman/خانم</label>
-          <select id="weeklyPodcastVoiceFemale" style="flex:1;min-width:180px;"><option value="">Auto (best guess)</option></select>
         </div>
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
-          <p class="hint" style="margin:0 0 8px;">MP3 read word for word by Gemini's voices (Charon for <code>آقا:</code>/Man, Kore for <code>خانم:</code>/Woman). If Gemini's free daily quota is used up, it is built with Microsoft's Farid/Dilara instead. Built in the cloud (GitHub) and saved next to the script in Drive; takes about 1–5 minutes.</p>
+          <p class="hint" style="margin:0 0 8px;">MP3 read word for word by Gemini's voices (Charon for <code>آقا:</code>/Man, Kore for <code>خانم:</code>/Woman). If Gemini's free daily quota runs out part-way, Microsoft's Farid / Dilara read the rest — still one MP3. Built in the cloud (GitHub) and kept in Drive for 2 days. A daily podcast takes a few minutes; a long weekly one can take up to about 40 minutes. Playback starts while the file is still downloading.</p>
           <div class="actions" style="margin:0;">
             <button id="weeklyPodcastMp3MakeBtn">🎙 Make MP3</button>
             <button id="weeklyPodcastMp3LoadBtn">🎧 Load latest MP3</button>
+            <label style="font-family:var(--sans);font-size:13px;color:var(--text-dim);">Speed
+              <select id="weeklyPodcastSpeed" style="margin-inline-start:4px;">
+                <option value="1">1×</option><option value="1.1">1.1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option>
+              </select>
+            </label>
             <a id="weeklyPodcastMp3Download" style="display:none;font-family:var(--sans);font-size:13px;font-weight:600;padding:7px 16px;border-radius:6px;background:var(--panel-2);color:var(--text);text-decoration:none;border:1px solid var(--border);">⬇ Download MP3</a>
           </div>
           <div id="weeklyPodcastMp3Status" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);margin-top:8px;min-height:16px;"></div>
           <audio id="weeklyPodcastAudio" controls preload="none" style="display:none;width:100%;margin-top:8px;"></audio>
+          <div id="weeklyPodcastMp3Note" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);margin-top:6px;"></div>
         </div>
-        <div id="weeklyPodcastTranscript" class="md-body" style="margin-top:14px;"></div>
       </section>
     </div>
 
@@ -2693,135 +2681,41 @@ setupFileBrowser({ folderId: WEEKLY_REPORT_FOLDER, ext:'md', namelike:'interpret
 })();
 
 // ================= Podcast (shared logic for Daily + Weekly) =================
-function parsePodcastScript(text){
-  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
-  const segments = [];
-  lines.forEach(line => {
-    const m = line.match(/^(آقا|خانم|man|woman|host|guest)\s*:\s*(.*)$/i);
-    if(m){
-      const raw = m[1];
-      const rawLower = raw.toLowerCase();
-      const speaker = (raw === 'آقا' || rawLower === 'man' || rawLower === 'host') ? 'male' : 'female';
-      segments.push({speaker, rawLabel: raw, text: m[2]});
-    } else if(segments.length){
-      segments[segments.length-1].text += ' ' + line; // wrapped continuation line
-    }
-  });
-  return segments;
-}
+// Script box + cloud MP3. "Make MP3" hands the script to Apps Script, which starts a GitHub workflow
+// (Gemini voices; Microsoft Farid / Dilara take over if Gemini's daily quota runs out). The MP3 is
+// saved in Drive and played here while it downloads, in slices, through Apps Script.
+const PODCAST_SPEED_KEY = 'bc_podcastSpeed';
+const PODCAST_WAIT_MIN = 45;           // how long "Make MP3" waits before giving up
+const PODCAST_FIRST_SLICE = 256 * 1024;      // small first slice -> playback starts quickly
+const PODCAST_SLICE = 2 * 1024 * 1024;       // later slices
+const PODCAST_APPEND = 256 * 1024;           // bytes handed to the player at a time
+const PODCAST_AHEAD_SEC = 480;         // keep up to 8 min buffered ahead (browsers cap audio buffers at ~12 MB)
+const PODCAST_BEHIND_SEC = 120;        // drop audio more than 2 min behind the play position
+const podcastAudios = [];              // so starting one podcast pauses the other
 
-function detectScriptLanguage(text){
-  const persianChars = (text.match(/[\u0600-\u06FF]/g) || []).length;
-  return persianChars > 5 ? 'fa' : 'en';
+function fmtClock(sec){
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
 }
-// Guesses a voice's gender from its name, since browsers don't expose gender directly.
-function guessVoiceGender(name){
-  const n = name.toLowerCase();
-  if(/\bfemale\b/.test(n)) return 'female';
-  if(/\bmale\b/.test(n)) return 'male';
-  const femaleNames = ['zira','samantha','victoria','karen','moira','tessa','susan','fiona','kate','amy','emma','joanna','salli','kimberly','ivy','kendra','aria','jenny','michelle','ana','allison','nicole','google us english'];
-  const maleNames = ['david','mark','james','guy','ryan','matthew','daniel','brian','justin','christopher','eric','fred','george'];
-  if(femaleNames.some(f => n.includes(f))) return 'female';
-  if(maleNames.some(m => n.includes(m))) return 'male';
-  return null;
-}
-// speechSynthesis.getVoices() can return an empty list right after page load, until the
-// browser finishes loading voices asynchronously — this waits for that instead of failing silently.
-function getVoicesAsync(){
-  return new Promise(resolve => {
-    let voices = speechSynthesis.getVoices();
-    if(voices.length){ resolve(voices); return; }
-    const onChange = () => { speechSynthesis.onvoiceschanged = null; resolve(speechSynthesis.getVoices()); };
-    speechSynthesis.onvoiceschanged = onChange;
-    setTimeout(() => { speechSynthesis.onvoiceschanged = null; resolve(speechSynthesis.getVoices()); }, 1200);
-  });
-}
-
-async function pickVoicesForLang(langPrefix){
-  const voices = await getVoicesAsync();
-  const matched = voices.filter(v => v.lang && v.lang.toLowerCase().startsWith(langPrefix));
-  if(matched.length === 0) return {male: null, female: null, fallback: voices[0] || null, list: []};
-
-  const classified = matched.map(v => ({v, gender: guessVoiceGender(v.name)}));
-  const used = new Set();
-  let male = classified.find(c => c.gender === 'male');
-  let female = classified.find(c => c.gender === 'female' && (!male || c.v !== male.v));
-  if(male) used.add(male.v);
-  if(female) used.add(female.v);
-  if(!male){ const pick = classified.find(c => !used.has(c.v)); if(pick){ male = pick; used.add(pick.v); } }
-  if(!female){ const pick = classified.find(c => !used.has(c.v)); if(pick){ female = pick; used.add(pick.v); } }
-
-  const maleVoice = male ? male.v : null;
-  const femaleVoice = female ? female.v : maleVoice;
-  return {male: maleVoice, female: femaleVoice, fallback: null, list: [maleVoice, femaleVoice].filter((v,i,a)=>v && a.indexOf(v)===i)};
+function b64ToBytes(b64){
+  const bin = atob(b64), out = new Uint8Array(bin.length);
+  for(let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 function setupPodcast(cfg){
   const loadBtn = document.getElementById(cfg.loadBtnId);
   const loadStatus = document.getElementById(cfg.loadStatusId);
   const scriptEl = document.getElementById(cfg.scriptId);
-  const playBtn = document.getElementById(cfg.playBtnId);
-  const pauseBtn = document.getElementById(cfg.pauseBtnId);
-  const stopBtn = document.getElementById(cfg.stopBtnId);
   const copyBtn = document.getElementById(cfg.copyBtnId);
-  const listVoicesBtn = document.getElementById(cfg.listVoicesBtnId);
-  const voiceStatus = document.getElementById(cfg.voiceStatusId);
-  const transcriptEl = document.getElementById(cfg.transcriptId);
-
-  if(listVoicesBtn){
-    listVoicesBtn.addEventListener('click', async () => {
-      voiceStatus.textContent = 'Checking this device\'s voices...';
-      if(!('speechSynthesis' in window)){ voiceStatus.textContent = 'This browser does not support speech synthesis at all.'; return; }
-      const voices = await getVoicesAsync();
-      if(!voices.length){ voiceStatus.textContent = 'No voices reported by this browser/device.'; return; }
-      const lines = voices.map(v => `${v.name} — ${v.lang}${v.default ? ' (default)' : ''}`);
-      transcriptEl.innerHTML = `<p><strong>${voices.length} voice(s) found on this device:</strong></p><p style="white-space:pre-line;font-family:var(--mono);font-size:12px;">${lines.join('\n')}</p>`;
-      voiceStatus.textContent = `Found ${voices.length} voice(s) — see the list below.`;
-    });
-  }
-
-  // Manual voice pick (per device, saved in this browser) — overrides the automatic gender guess entirely,
-  // since some platforms (notably Android) name voices only by locale with no gender hint at all.
-  const maleSelect = document.getElementById(cfg.maleSelectId);
-  const femaleSelect = document.getElementById(cfg.femaleSelectId);
-  function voiceOptionValue(v){ return `${v.name}|${v.lang}`; }
-  function findVoiceByValue(list, val){
-    if(!val) return null;
-    const [name, lang] = val.split('|');
-    return list.find(v => v.name === name && v.lang === lang) || null;
-  }
-  async function populateVoiceSelects(){
-    if(!maleSelect || !femaleSelect) return;
-    const voices = await getVoicesAsync();
-    const savedMale = localStorage.getItem((cfg.cacheKey||'pc') + '_voiceMale') || '';
-    const savedFemale = localStorage.getItem((cfg.cacheKey||'pc') + '_voiceFemale') || '';
-    maleSelect.innerHTML = '<option value="">Auto (best guess)</option>';
-    femaleSelect.innerHTML = '<option value="">Auto (best guess)</option>';
-    voices.forEach(v => {
-      const val = voiceOptionValue(v);
-      const label = `${v.name} — ${v.lang}`;
-      const optM = document.createElement('option'); optM.value = val; optM.textContent = label;
-      const optF = optM.cloneNode(true);
-      maleSelect.appendChild(optM);
-      femaleSelect.appendChild(optF);
-    });
-    if(savedMale) maleSelect.value = savedMale;
-    if(savedFemale) femaleSelect.value = savedFemale;
-  }
-  if(maleSelect && femaleSelect){
-    populateVoiceSelects();
-    maleSelect.addEventListener('change', () => localStorage.setItem((cfg.cacheKey||'pc') + '_voiceMale', maleSelect.value));
-    femaleSelect.addEventListener('change', () => localStorage.setItem((cfg.cacheKey||'pc') + '_voiceFemale', femaleSelect.value));
-  }
-
-  if(!('speechSynthesis' in window) && voiceStatus) voiceStatus.textContent = 'This browser does not support speech synthesis.';
 
   copyBtn.addEventListener('click', async () => {
     const text = scriptEl.value;
     if(!text.trim()){ loadStatus.textContent = 'Nothing to copy — load or paste a script first.'; return; }
     try{
       await navigator.clipboard.writeText(text);
-      loadStatus.textContent = 'Full script copied ✓ — paste it into any app that can read Persian text aloud.';
+      loadStatus.textContent = 'Full script copied ✓';
     }catch(e){
       loadStatus.textContent = 'Auto-copy failed — please select the text in the box above manually and copy it.';
     }
@@ -2851,48 +2745,254 @@ function setupPodcast(cfg){
       loadStatus.textContent = `Loaded "${cached.filename}" (updated ${new Date(cached.lastUpdated).toLocaleString()}) — from local cache. Click "Load latest script" to refresh.`;
     }
   }
+  // A typed/pasted edit means the text no longer matches the loaded Drive file, so don't reuse its name.
+  scriptEl.addEventListener('input', () => { scriptEl.dataset.filename = ''; });
 
-  // ---- Cloud MP3 (Farid / Dilara) ----
-  // Make MP3: hand the script to Apps Script, which starts a GitHub workflow (edge-tts); then poll the
-  // job's status and, once done, fetch the MP3 from Drive and play it here. The dashboard only ever
-  // talks to Apps Script — the GitHub token and shared secret live in Apps Script's Script Properties.
+  // ---- Cloud MP3 player ----
   const mp3MakeBtn = document.getElementById(cfg.mp3MakeBtnId);
   const mp3LoadBtn = document.getElementById(cfg.mp3LoadBtnId);
   const mp3Status = document.getElementById(cfg.mp3StatusId);
   const audioEl = document.getElementById(cfg.audioId);
   const mp3Download = document.getElementById(cfg.mp3DownloadId);
-  // A typed/pasted edit means the text no longer matches the loaded Drive file, so don't reuse its name.
-  scriptEl.addEventListener('input', () => { scriptEl.dataset.filename = ''; });
+  const speedSel = document.getElementById(cfg.speedId);
+  const noteEl = document.getElementById(cfg.noteId);
+  podcastAudios.push(audioEl);
 
-  async function loadMp3(fileId){
-    if(!GAS_URL){ mp3Status.textContent = 'Apps Script URL is not set (Settings tab).'; return; }
-    mp3Status.textContent = 'Loading MP3 from Drive...';
+  // Playback speed — one setting for both podcasts, remembered in this browser (default 1×).
+  function savedSpeed(){
+    let v = 1;
+    try{ v = parseFloat(localStorage.getItem(PODCAST_SPEED_KEY)) || 1; }catch(e){ /* storage blocked */ }
+    return [1, 1.1, 1.25, 1.5].includes(v) ? v : 1;
+  }
+  function applySpeed(){
+    const v = savedSpeed();
+    speedSel.value = String(v);
+    audioEl.defaultPlaybackRate = v;
+    audioEl.playbackRate = v;
+  }
+  applySpeed();
+  speedSel.addEventListener('change', () => {
+    try{ localStorage.setItem(PODCAST_SPEED_KEY, speedSel.value); }catch(e){ /* storage blocked */ }
+    document.querySelectorAll('select[data-podcast-speed]').forEach(s => s.dispatchEvent(new Event('podcastspeed')));
+  });
+  speedSel.dataset.podcastSpeed = '1';
+  speedSel.addEventListener('podcastspeed', applySpeed);
+  audioEl.addEventListener('loadedmetadata', applySpeed);
+
+  let S = null; // the current playback session
+
+  function endSession(){
+    if(!S) return;
+    S.dead = true;
+    clearInterval(S.timer);
+    try{ audioEl.pause(); }catch(e){}
+    audioEl.removeAttribute('src');
+    try{ audioEl.load(); }catch(e){}
+    if(S.srcUrl) URL.revokeObjectURL(S.srcUrl);
+    S = null;
+  }
+
+  function statusLine(){
+    if(!S || !S.info) return;
+    const i = S.info, parts = [`"${i.filename}"`, `updated ${new Date(i.lastUpdated).toLocaleString()}`,
+                               `${(i.size/1e6).toFixed(1)} MB`];
+    if(S.duration) parts.push(fmtClock(S.duration));
+    let tail;
+    if(S.failed) tail = S.failed;
+    else if(S.downloaded >= i.size) tail = 'fully downloaded';
+    else tail = `downloading ${Math.floor(S.downloaded * 100 / i.size)}%`;
+    mp3Status.textContent = `${parts.join(' · ')} — ${tail}`;
+  }
+
+  async function fetchSlice(s, start, length){
+    let lastErr;
+    for(let attempt = 0; attempt < 4; attempt++){
+      if(s.dead) return null;
+      try{
+        const url = `${GAS_URL}?action=ttsslice&fileId=${encodeURIComponent(s.info.fileId)}&start=${start}&length=${length}`;
+        const json = await (await fetch(url)).json();
+        if(json.status !== 'ok') throw new Error(json.message || 'slice error');
+        return b64ToBytes(json.content);
+      }catch(e){
+        lastErr = e;
+        await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  }
+
+  async function downloadAll(s){
+    while(!s.dead && s.downloaded < s.info.size){
+      const len = s.downloaded === 0 ? PODCAST_FIRST_SLICE : PODCAST_SLICE;
+      const part = await fetchSlice(s, s.downloaded, len);
+      if(!part || s.dead) return;
+      if(!part.length) throw new Error('empty slice');
+      s.bytes.set(part.subarray(0, s.info.size - s.downloaded), s.downloaded);
+      s.downloaded += part.length;
+      statusLine();
+      pump(s);
+    }
+    if(s.dead) return;
+    const blobUrl = URL.createObjectURL(new Blob([s.bytes], {type:'audio/mpeg'}));
+    mp3Download.href = blobUrl;
+    mp3Download.download = s.info.filename;
+    mp3Download.style.display = 'inline-block';
+    s.blobUrl = blobUrl;
+    statusLine();
+    if(!s.stream) startBlob(s, 0, s.autoplay); // no streaming support: play once it's all here
+    pump(s);
+  }
+
+  // Plain playback of the fully downloaded file (no-streaming browsers, or if streaming fails).
+  function startBlob(s, at, play){
+    s.stream = false;
+    audioEl.src = s.blobUrl;
+    audioEl.addEventListener('loadedmetadata', function once(){
+      audioEl.removeEventListener('loadedmetadata', once);
+      if(at) audioEl.currentTime = at;
+      if(play) audioEl.play().catch(() => {});
+    });
+  }
+
+  // Feed the streaming player: keep ~8 minutes ahead of the play position, drop what's long past,
+  // and restart from the right frame after a seek outside what's buffered.
+  function pump(s){
+    if(!s || s.dead || !s.stream || !s.sb || s.sb.updating || s.ms.readyState === 'closed') return;
+    const m = s.info.meta, fb = m.frameBytes, fs = m.frameSec, a0 = m.audioStart || 0, size = s.info.size;
+    const t = audioEl.currentTime, b = s.sb.buffered;
     try{
-      const url = `${GAS_URL}?action=ttsmp3&folder=${encodeURIComponent(cfg.folderId)}` + (fileId ? `&fileId=${encodeURIComponent(fileId)}` : '');
-      const json = await (await fetch(url)).json();
-      if(json.status !== 'ok'){ mp3Status.textContent = 'Error: ' + (json.message || 'not found'); return; }
-      const bin = atob(json.content);
-      const bytes = new Uint8Array(bin.length);
-      for(let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      if(audioEl.dataset.url) URL.revokeObjectURL(audioEl.dataset.url);
-      const objUrl = URL.createObjectURL(new Blob([bytes], {type:'audio/mpeg'}));
-      audioEl.dataset.url = objUrl;
-      audioEl.src = objUrl;
-      audioEl.style.display = 'block';
-      mp3Download.href = objUrl;
-      mp3Download.download = json.filename;
-      mp3Download.style.display = 'inline-block';
-      mp3Status.textContent = `Loaded "${json.filename}" (updated ${new Date(json.lastUpdated).toLocaleString()}, ${(bytes.length/1e6).toFixed(1)} MB).`;
+      let range = null;
+      for(let k = 0; k < b.length; k++){ if(b.start(k) <= t + 0.25 && b.end(k) >= t - 0.25) range = [b.start(k), b.end(k)]; }
+      if(!range){
+        if(b.length){ s.sb.remove(0, Math.max(s.duration, b.end(b.length - 1)) + 1); return; } // clears everything; updateend calls pump again
+        s.appendPos = Math.min(size, a0 + Math.floor(t / fs) * fb);
+      }else{
+        if(range[0] < t - PODCAST_BEHIND_SEC){ s.sb.remove(0, t - 60); return; }
+        if(range[1] - t > PODCAST_AHEAD_SEC) return;
+      }
+      if(s.appendPos >= size){
+        if(s.downloaded >= size && s.ms.readyState === 'open') s.ms.endOfStream();
+        return;
+      }
+      let end = Math.min(s.downloaded, s.appendPos + PODCAST_APPEND);
+      if(end < size) end = a0 + Math.floor((end - a0) / fb) * fb; // whole frames only
+      if(end <= s.appendPos) return; // waiting for the download
+      s.sb.timestampOffset = (s.appendPos - a0) / fb * fs;
+      s.sb.appendBuffer(s.bytes.subarray(s.appendPos, end));
+      s.appendPos = end;
     }catch(e){
-      mp3Status.textContent = 'Failed to load the MP3: ' + e.message;
+      streamFailed(s);
     }
   }
-  if(audioEl){
-    // Don't let the browser voices and the MP3 talk over each other.
-    audioEl.addEventListener('play', () => { pcPlaying = false; if('speechSynthesis' in window) speechSynthesis.cancel(); });
+  function streamFailed(s){
+    if(!s.stream || s.dead) return;
+    const at = audioEl.currentTime, wasPlaying = !audioEl.paused;
+    s.stream = false;
+    if(s.blobUrl) startBlob(s, at, wasPlaying);
+    // otherwise downloadAll() switches to the finished file as soon as it's complete
   }
-  if(mp3LoadBtn) mp3LoadBtn.addEventListener('click', () => loadMp3(null));
-  if(mp3MakeBtn) mp3MakeBtn.addEventListener('click', async () => {
+
+  function canStream(meta){
+    return !!(window.MediaSource && MediaSource.isTypeSupported && MediaSource.isTypeSupported('audio/mpeg') &&
+              meta && meta.frameBytes && meta.frameSec);
+  }
+
+  // Start a session: the audio element is attached synchronously (inside the click), so the browser
+  // lets it start playing as soon as the first slice arrives.
+  async function openPodcast(getInfo, autoplay){
+    endSession();
+    mp3Download.style.display = 'none';
+    noteEl.textContent = '';
+    const s = S = {dead:false, autoplay, downloaded:0, appendPos:0, stream:false};
+    if(window.MediaSource && MediaSource.isTypeSupported && MediaSource.isTypeSupported('audio/mpeg')){
+      s.ms = new MediaSource();
+      s.srcUrl = URL.createObjectURL(s.ms);
+      s.opened = new Promise(r => s.ms.addEventListener('sourceopen', r, {once:true}));
+      audioEl.src = s.srcUrl;
+      audioEl.style.display = 'block';
+      if(autoplay) audioEl.play().catch(() => {});
+    }
+    mp3Status.textContent = 'Loading the MP3 from Drive...';
+    let info;
+    try{ info = await getInfo(); }
+    catch(e){ if(!s.dead){ endSession(); mp3Status.textContent = e.message; } return; }
+    if(s.dead) return;
+    s.info = info;
+    s.duration = (info.meta && info.meta.duration) || 0;
+    s.bytes = new Uint8Array(info.size);
+    noteEl.textContent = (info.meta && info.meta.note) || '';
+    audioEl.style.display = 'block';
+    if(s.ms && canStream(info.meta)){
+      await s.opened;
+      if(s.dead) return;
+      try{
+        s.sb = s.ms.addSourceBuffer('audio/mpeg');
+        if(s.sb.mode !== 'sequence') s.sb.mode = 'sequence';
+        if(s.duration) s.ms.duration = s.duration;
+        s.stream = true;
+        s.sb.addEventListener('updateend', () => pump(s));
+        s.sb.addEventListener('error', () => streamFailed(s));
+      }catch(e){ s.stream = false; }
+    }
+    if(!s.stream){
+      if(s.srcUrl){ audioEl.removeAttribute('src'); URL.revokeObjectURL(s.srcUrl); s.srcUrl = null; }
+    }
+    s.timer = setInterval(() => pump(s), 1000);
+    statusLine();
+    try{ await downloadAll(s); }
+    catch(e){ if(!s.dead){ s.failed = 'download failed: ' + e.message + ' — try "Load latest MP3" again'; statusLine(); } }
+  }
+
+  async function infoFromDrive(fileId){
+    if(!GAS_URL) throw new Error('Apps Script URL is not set (Settings tab).');
+    const url = `${GAS_URL}?action=ttsmeta&` + (fileId ? `fileId=${encodeURIComponent(fileId)}` : `folder=${encodeURIComponent(cfg.folderId)}`);
+    let json;
+    try{ json = await (await fetch(url)).json(); }
+    catch(e){ throw new Error('Failed to reach the Drive script: ' + e.message); }
+    if(json.status !== 'ok') throw new Error(json.message === 'unknown action'
+      ? 'The Drive script does not know this request yet — deploy the Apps Script update as a new version.'
+      : 'Error: ' + (json.message || 'not found'));
+    return json;
+  }
+
+  audioEl.addEventListener('seeking', () => pump(S));
+  audioEl.addEventListener('timeupdate', () => { pump(S); updatePosition(); });
+  audioEl.addEventListener('error', () => { if(S && S.stream && S.srcUrl && audioEl.currentSrc === S.srcUrl) streamFailed(S); });
+
+  // Lock screen / notification controls: title, play/pause, back and forward 15 s.
+  let lastPos = 0;
+  function updatePosition(){
+    if(!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState || !S) return;
+    const now = Date.now();
+    if(now - lastPos < 5000) return;
+    lastPos = now;
+    const d = S.duration || (isFinite(audioEl.duration) ? audioEl.duration : 0);
+    if(!d) return;
+    try{ navigator.mediaSession.setPositionState({duration: d, playbackRate: audioEl.playbackRate, position: Math.min(audioEl.currentTime, d)}); }catch(e){}
+  }
+  audioEl.addEventListener('play', () => {
+    podcastAudios.forEach(a => { if(a !== audioEl && !a.paused) a.pause(); });
+    applySpeed();
+    if(!('mediaSession' in navigator) || !S || !S.info) return;
+    const ms = navigator.mediaSession;
+    try{
+      ms.metadata = new MediaMetadata({title: S.info.filename.replace(/\.mp3$/i, ''), artist: cfg.title, album: 'Gold dashboard'});
+      const skip = d => {
+        const max = S && S.duration ? S.duration : (isFinite(audioEl.duration) ? audioEl.duration : Infinity);
+        audioEl.currentTime = Math.max(0, Math.min(max - 1, audioEl.currentTime + d));
+      };
+      ms.setActionHandler('play', () => audioEl.play());
+      ms.setActionHandler('pause', () => audioEl.pause());
+      ms.setActionHandler('seekbackward', ev => skip(-((ev && ev.seekOffset) || 15)));
+      ms.setActionHandler('seekforward', ev => skip((ev && ev.seekOffset) || 15));
+      try{ ms.setActionHandler('seekto', ev => { audioEl.currentTime = ev.seekTime; }); }catch(e){}
+      lastPos = 0; updatePosition();
+    }catch(e){ /* older browsers: plain controls still work */ }
+  });
+
+  mp3LoadBtn.addEventListener('click', () => openPodcast(() => infoFromDrive(null), true));
+
+  mp3MakeBtn.addEventListener('click', async () => {
     const text = scriptEl.value;
     if(!text.trim()){ mp3Status.textContent = 'Nothing to convert — load or paste a script first.'; return; }
     if(!GAS_URL){ mp3Status.textContent = 'Apps Script URL is not set (Settings tab).'; return; }
@@ -2916,137 +3016,43 @@ function setupPodcast(cfg){
     const poll = async () => {
       let st = null;
       try{ st = await (await fetch(`${GAS_URL}?action=ttsstatus&job=${encodeURIComponent(job)}`)).json(); }catch(e){ /* transient — keep polling */ }
-      const secs = Math.round((Date.now() - started) / 1000);
+      const secs = (Date.now() - started) / 1000;
       if(st && st.state === 'done'){
         mp3MakeBtn.disabled = false;
-        await loadMp3(st.fileId);
-        if(st.engine) mp3Status.textContent += st.engine === 'gemini' ? ' Voices: Gemini.' : ' Voices: Microsoft Farid/Dilara (Gemini was unavailable — e.g. daily free quota used up).';
+        openPodcast(() => infoFromDrive(st.fileId), false).then(() => {});
         return;
       }
       if(st && st.state === 'error') return finish('MP3 failed: ' + st.message);
       if(st && st.status === 'error' && !st.state) return finish('The Drive script did not recognise this request — has the Apps Script update been deployed as a new version?');
-      if(secs > 900) return finish('Not finished after 15 minutes — check the Actions tab of the GitHub repo.');
-      const label = (!st || st.state === 'unknown') ? 'Waiting for the Drive script' : st.state === 'queued' ? 'Queued on GitHub' : 'Building the audio';
-      mp3Status.textContent = `${label}… ${secs}s`;
+      if(secs > PODCAST_WAIT_MIN * 60) return finish(`Not finished after ${PODCAST_WAIT_MIN} minutes — check the Actions tab of the GitHub repo, then try "Load latest MP3".`);
+      let label;
+      if(!st || st.state === 'unknown') label = 'Waiting for the Drive script…';
+      else if(st.state === 'queued') label = 'Queued on GitHub…';
+      else if(/^Uploading/.test(st.message || '')) label = st.message;
+      else label = 'Building the audio' + (st.message ? ' — ' + st.message : '…');
+      mp3Status.textContent = `${label} — ${fmtClock(secs)}`;
       setTimeout(poll, 8000);
     };
     setTimeout(poll, 3000);
   });
-
-  // Manual playback state — we drive one utterance at a time ourselves instead of relying on the
-  // browser's native pause()/resume() queue handling, which is unreliable across multi-utterance
-  // sequences in Chrome. Pause = fully stop + remember which segment we were on; Play = re-speak
-  // starting from that same segment (not from zero).
-  let pcSegments = [];
-  let pcIndex = 0;
-  let pcPlaying = false;
-  let pcLangTag = 'en-US';
-  let pcVoices = {male:null, female:null, fallback:null};
-  let pcManualMale = null;
-  let pcManualFemale = null;
-  let pcLastText = '';
-
-  function pcHighlightAndBuildTranscript(activeIdx){
-    let html = '';
-    pcSegments.forEach((seg,i) => {
-      const activeStyle = (i===activeIdx) ? ' style="color:var(--gold);"' : '';
-      html += `<p${activeStyle}><strong>${seg.rawLabel}:</strong> ${seg.text}</p>`;
-    });
-    transcriptEl.innerHTML = html;
-  }
-
-  function pcSpeakFrom(idx){
-    if(idx >= pcSegments.length){ pcPlaying = false; pcIndex = 0; return; }
-    pcIndex = idx;
-    pcHighlightAndBuildTranscript(idx);
-    const seg = pcSegments[idx];
-    const u = new SpeechSynthesisUtterance(seg.text);
-    u.lang = pcLangTag;
-    const manualVoice = seg.speaker === 'male' ? pcManualMale : pcManualFemale;
-    if(manualVoice){ u.voice = manualVoice; u.pitch = 1.0; }
-    else if(pcVoices.male && seg.speaker==='male'){ u.voice = pcVoices.male; u.pitch = 0.9; }
-    else if(pcVoices.female && seg.speaker==='female'){ u.voice = pcVoices.female; u.pitch = (pcVoices.male===pcVoices.female) ? 1.4 : 1.0; }
-    else if(pcVoices.fallback){ u.voice = pcVoices.fallback; u.pitch = seg.speaker==='male' ? 0.9 : 1.3; }
-    u.onend = () => { if(pcPlaying) pcSpeakFrom(idx+1); };
-    u.onerror = () => { if(pcPlaying) pcSpeakFrom(idx+1); }; // skip a problem segment instead of getting stuck
-    speechSynthesis.speak(u);
-  }
-
-  playBtn.addEventListener('click', async () => {
-    if(!('speechSynthesis' in window) || pcPlaying) return;
-    const text = scriptEl.value;
-    if(!text.trim()) return;
-
-    if(text !== pcLastText || pcSegments.length === 0){
-      pcSegments = parsePodcastScript(text);
-      pcIndex = 0;
-      pcLastText = text;
-    }
-    if(pcSegments.length === 0){
-      voiceStatus.textContent = 'No speaker labels found (expected "Man:"/"Woman:" or "آقا:"/"خانم:") — check the script format.';
-      return;
-    }
-
-    const lang = detectScriptLanguage(text);
-    pcLangTag = lang === 'fa' ? 'fa-IR' : 'en-US';
-    const langName = lang === 'fa' ? 'Persian' : 'English';
-    voiceStatus.textContent = 'Preparing voices...';
-
-    const allVoices = await getVoicesAsync();
-    pcManualMale = maleSelect ? findVoiceByValue(allVoices, maleSelect.value) : null;
-    pcManualFemale = femaleSelect ? findVoiceByValue(allVoices, femaleSelect.value) : null;
-
-    if(pcManualMale && pcManualFemale){
-      voiceStatus.textContent = `Using your selected voices: ${pcManualMale.name} / ${pcManualFemale.name}`;
-    } else {
-      pcVoices = await pickVoicesForLang(lang);
-      if(pcManualMale || pcManualFemale){
-        voiceStatus.textContent = 'Using one selected voice, auto-guessing the other.';
-      } else if(pcVoices.list.length >= 2){
-        voiceStatus.textContent = `Using 2 ${langName} voices: ${pcVoices.list[0].name} / ${pcVoices.list[1].name}`;
-      } else if(pcVoices.list.length === 1){
-        voiceStatus.textContent = `Only 1 ${langName} voice found (${pcVoices.list[0].name}) — using pitch variation, or pick voices manually above for a real difference.`;
-      } else {
-        voiceStatus.textContent = `No ${langName} voice found on this system — falling back to the default voice.`;
-      }
-    }
-
-    speechSynthesis.cancel();
-    pcPlaying = true;
-    pcSpeakFrom(pcIndex);
-  });
-  pauseBtn.addEventListener('click', () => {
-    if(!('speechSynthesis' in window) || !pcPlaying) return;
-    pcPlaying = false;      // tell the onend handler not to auto-advance
-    speechSynthesis.cancel(); // fully stop — pcIndex already points at the segment we were on
-  });
-  stopBtn.addEventListener('click', () => {
-    pcPlaying = false;
-    pcIndex = 0;
-    if('speechSynthesis' in window) speechSynthesis.cancel();
-  });
 }
 
 setupPodcast({
-  folderId: WEEKLY_REPORT_FOLDER,
+  folderId: WEEKLY_REPORT_FOLDER, title: 'Weekly gold podcast',
   loadBtnId: 'weeklyPodcastLoadBtn', loadStatusId: 'weeklyPodcastLoadStatus',
-  scriptId: 'weeklyPodcastScript', playBtnId: 'weeklyPodcastPlayBtn',
-  pauseBtnId: 'weeklyPodcastPauseBtn', stopBtnId: 'weeklyPodcastStopBtn', copyBtnId: 'weeklyPodcastCopyBtn', listVoicesBtnId: 'weeklyPodcastListVoicesBtn',
-  maleSelectId: 'weeklyPodcastVoiceMale', femaleSelectId: 'weeklyPodcastVoiceFemale',
-  voiceStatusId: 'weeklyPodcastVoiceStatus', transcriptId: 'weeklyPodcastTranscript',
+  scriptId: 'weeklyPodcastScript', copyBtnId: 'weeklyPodcastCopyBtn',
   mp3MakeBtnId: 'weeklyPodcastMp3MakeBtn', mp3LoadBtnId: 'weeklyPodcastMp3LoadBtn', mp3StatusId: 'weeklyPodcastMp3Status',
   audioId: 'weeklyPodcastAudio', mp3DownloadId: 'weeklyPodcastMp3Download',
+  speedId: 'weeklyPodcastSpeed', noteId: 'weeklyPodcastMp3Note',
   cacheKey: 'bc_cache_weeklyPodcast'
 });
 setupPodcast({
-  folderId: DAILY_REPORT_FOLDER,
+  folderId: DAILY_REPORT_FOLDER, title: 'Daily gold podcast',
   loadBtnId: 'dailyPodcastLoadBtn', loadStatusId: 'dailyPodcastLoadStatus',
-  scriptId: 'dailyPodcastScript', playBtnId: 'dailyPodcastPlayBtn',
-  pauseBtnId: 'dailyPodcastPauseBtn', stopBtnId: 'dailyPodcastStopBtn', copyBtnId: 'dailyPodcastCopyBtn', listVoicesBtnId: 'dailyPodcastListVoicesBtn',
-  maleSelectId: 'dailyPodcastVoiceMale', femaleSelectId: 'dailyPodcastVoiceFemale',
-  voiceStatusId: 'dailyPodcastVoiceStatus', transcriptId: 'dailyPodcastTranscript',
+  scriptId: 'dailyPodcastScript', copyBtnId: 'dailyPodcastCopyBtn',
   mp3MakeBtnId: 'dailyPodcastMp3MakeBtn', mp3LoadBtnId: 'dailyPodcastMp3LoadBtn', mp3StatusId: 'dailyPodcastMp3Status',
   audioId: 'dailyPodcastAudio', mp3DownloadId: 'dailyPodcastMp3Download',
+  speedId: 'dailyPodcastSpeed', noteId: 'dailyPodcastMp3Note',
   cacheKey: 'bc_cache_dailyPodcast'
 });
 

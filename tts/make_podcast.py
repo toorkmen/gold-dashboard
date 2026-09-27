@@ -2,10 +2,10 @@
 """Build a two-voice Persian podcast MP3 from a dialogue script, read word for word.
 
 Engines
-  gemini     Google Gemini TTS (needs GEMINI_API_KEY; free tier has a daily request cap).
-  microsoft  Microsoft Read Aloud voices Farid / Dilara through edge-tts (unofficial, no key).
-  auto       (default) Gemini first; if it can't finish (no key, daily quota used up, outage)
-             the WHOLE podcast is rebuilt with Microsoft, so a run never ends empty-handed.
+  gemini     Google Gemini TTS only (needs GEMINI_API_KEY; the free tier has a daily request cap).
+  microsoft  Microsoft Read Aloud voices Farid / Dilara through edge-tts only (unofficial, no key).
+  auto       (default) Gemini chunk by chunk; the moment Gemini can't go on (daily limit, outage,
+             time budget) the REMAINING chunks are read by Farid / Dilara. One MP3 either way.
 
 Script format (same rules as the dashboard's parsePodcastScript):
     آقا: ...   / Man: ... / Host: ...   -> male voice
@@ -15,9 +15,11 @@ Script format (same rules as the dashboard's parsePodcastScript):
 
 Two ways to run
   * JOB_ID set (dashboard -> Apps Script -> this workflow): fetch the script from Apps Script,
-    build the MP3, upload it back to Drive.
+    build the MP3, upload it straight into Drive (resumable upload, no size limit).
   * JOB_ID empty (manual "Run workflow" test on GitHub): read SCRIPT_TEXT ("\\n" = new line) and
-    write one MP3 per engine into out/ so the two can be compared.
+    write the MP3(s) into out/.
+
+The repo is public, so nothing printed here may contain the script text, URLs or secrets.
 """
 import asyncio
 import base64
@@ -28,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import wave
 
 import requests
 
@@ -40,7 +43,14 @@ GEMINI_MODELS = [m.strip() for m in (os.environ.get("GEMINI_MODEL") or
 GEMINI_MALE = os.environ.get("GEMINI_MALE_VOICE") or "Charon"    # "Informative"
 GEMINI_FEMALE = os.environ.get("GEMINI_FEMALE_VOICE") or "Kore"  # "Firm"
 GEMINI_STYLE = os.environ.get("GEMINI_STYLE") or "clear, calm and informative podcast narration"
-GEMINI_CHUNK_CHARS = int(os.environ.get("GEMINI_CHUNK_CHARS") or "3000")
+CHUNK_CHARS = int(os.environ.get("CHUNK_CHARS") or "6000")
+# Truncation guard: Persian speech runs ~12-16 characters per second. A chunk whose audio is
+# much shorter than chars/25 seconds was cut off by the model -> split it in two and retry.
+MIN_CHARS_FOR_CHECK = 600
+CHARS_PER_SEC_MAX = 25.0
+MAX_SPLIT_DEPTH = 3
+# After this many minutes Gemini hands the rest to Microsoft, so the dashboard's 45-min wait holds.
+GEMINI_TIME_BUDGET = float(os.environ.get("GEMINI_TIME_BUDGET_MIN") or "30") * 60
 API = "https://generativelanguage.googleapis.com/v1beta"
 
 MS_MALE = os.environ.get("MALE_VOICE") or "fa-IR-FaridNeural"
@@ -50,12 +60,17 @@ MS_CONCURRENCY = 3
 
 PAUSE_SEC = float(os.environ.get("PAUSE_SEC") or "0.45")
 SAMPLE_RATE = 24000
+BITRATE_K = 64
+UPLOAD_CHUNK = 8 * 1024 * 1024  # must be a multiple of 256 KB
 
 GAS_URL = os.environ.get("GAS_URL", "").strip()
 SECRET = os.environ.get("TTS_SECRET", "").strip()
 JOB_ID = os.environ.get("JOB_ID", "").strip()
 
 LABEL_RE = re.compile(r"^(آقا|خانم|man|woman|host|guest)\s*:\s*(.*)$", re.IGNORECASE)
+SENTENCE_END_RE = re.compile(r"(?<=[.!?؟!…:؛])\s+")
+
+_SECRET_URLS = []  # upload session URLs etc. — hidden from every message
 
 
 class QuotaExhausted(RuntimeError):
@@ -63,11 +78,12 @@ class QuotaExhausted(RuntimeError):
 
 
 def redact(msg):
-    """Never let the Apps Script URL or the secrets reach the (public) run page."""
+    """Never let the Apps Script URL, upload URLs or the secrets reach the (public) run page."""
     msg = str(msg)
-    for s in (GAS_URL, SECRET, GEMINI_KEY):
+    for s in (GAS_URL, SECRET, GEMINI_KEY, *_SECRET_URLS):
         if s:
             msg = msg.replace(s, "<hidden>")
+    msg = re.sub(r"upload_id=[A-Za-z0-9_-]+", "upload_id=<hidden>", msg)
     return re.sub(r"/macros/s/[A-Za-z0-9_-]+", "/macros/s/<hidden>", msg)
 
 
@@ -76,6 +92,33 @@ def annotate(level, msg):
     summary page even when the full log can't be opened, so every key step reports through them."""
     msg = redact(msg).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     print(f"::{level}::{msg}", flush=True)
+
+
+def fmt_time(sec):
+    sec = int(round(sec))
+    h, rest = divmod(sec, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+# ---------------- progress reporting (to the dashboard, through Apps Script) ----------------
+_last_progress = [0.0, ""]
+
+
+def progress(message, force=False):
+    print(message, flush=True)
+    if not JOB_ID or not GAS_URL:
+        return
+    now = time.time()
+    if not force and message == _last_progress[1]:
+        return
+    if not force and now - _last_progress[0] < 15:
+        return
+    _last_progress[:] = [now, message]
+    try:
+        gas_post({"action": "ttsprogress", "job": JOB_ID, "secret": SECRET, "message": message[:200]})
+    except Exception as e:  # progress is best-effort
+        print(redact(f"(progress report failed: {e})"), flush=True)
 
 
 # ---------------- script parsing ----------------
@@ -105,10 +148,35 @@ def parse_script(text):
     return segments
 
 
+def split_text(text, max_chars):
+    """Split one long turn at sentence ends (or spaces) into pieces of at most ~max_chars."""
+    if len(text) <= max_chars:
+        return [text]
+    parts, cur = [], ""
+    for sent in SENTENCE_END_RE.split(text):
+        while len(sent) > max_chars:  # a "sentence" with no punctuation at all: cut at a space
+            cut = sent.rfind(" ", 0, max_chars)
+            cut = cut if cut > max_chars // 2 else max_chars
+            if cur:
+                parts.append(cur)
+                cur = ""
+            parts.append(sent[:cut].strip())
+            sent = sent[cut:].strip()
+        if cur and len(cur) + 1 + len(sent) > max_chars:
+            parts.append(cur)
+            cur = sent
+        else:
+            cur = (cur + " " + sent).strip()
+    if cur:
+        parts.append(cur)
+    return [p for p in parts if p]
+
+
 def chunk_turns(segments, max_chars):
-    """Group consecutive turns into requests of at most ~max_chars (a single long turn stays whole)."""
+    """Group consecutive turns into chunks of at most ~max_chars; over-long turns are split first."""
+    flat = [(spk, piece) for spk, t in segments for piece in split_text(t, max_chars)]
     chunks, cur, size = [], [], 0
-    for spk, t in segments:
+    for spk, t in flat:
         if cur and size + len(t) > max_chars:
             chunks.append(cur)
             cur, size = [], 0
@@ -119,30 +187,60 @@ def chunk_turns(segments, max_chars):
     return chunks
 
 
+def halve(turns):
+    """Split a chunk into two halves of roughly equal characters (splitting a turn if needed)."""
+    total = sum(len(t) for _, t in turns)
+    if len(turns) == 1:
+        spk, t = turns[0]
+        pieces = split_text(t, max(200, len(t) // 2 + 50))
+        if len(pieces) < 2:
+            mid = t.rfind(" ", 0, len(t) // 2 + 1)
+            mid = mid if mid > 0 else len(t) // 2
+            pieces = [t[:mid].strip(), t[mid:].strip()]
+        first = pieces[:len(pieces) // 2] or pieces[:1]
+        second = pieces[len(first):]
+        return [(spk, " ".join(first))], [(spk, " ".join(second))]
+    acc = 0
+    for i, (_, t) in enumerate(turns):
+        acc += len(t)
+        if acc >= total / 2:
+            i = max(1, min(i + (1 if acc - len(t) / 2 < total / 2 else 0), len(turns) - 1))
+            return turns[:i], turns[i:]
+    return turns[:1], turns[1:]
+
+
 # ---------------- audio helpers ----------------
 def run(cmd):
     subprocess.run(cmd, check=True)
 
 
-def to_wav(audio_bytes, path, rate=SAMPLE_RATE):
-    """Gemini returns WAV (RIFF) for normal requests, raw 16-bit PCM in some cases — normalise to WAV."""
-    if audio_bytes[:4] == b"RIFF":
-        with open(path, "wb") as f:
-            f.write(audio_bytes)
-        return
-    raw = path + ".pcm"
+def wav_seconds(path):
+    with wave.open(path, "rb") as w:
+        return w.getnframes() / float(w.getframerate())
+
+
+def normalize(src, dst, fmt_args=()):
+    """Any audio -> 24 kHz mono 16-bit WAV, so every piece joins cleanly and can be measured."""
+    run(["ffmpeg", "-y", "-loglevel", "error", *fmt_args, "-i", src, "-map_metadata", "-1",
+         "-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", "-fflags", "+bitexact", dst])
+
+
+def audio_bytes_to_wav(audio_bytes, path, rate=SAMPLE_RATE):
+    """Gemini returns WAV (RIFF) for normal requests, raw 16-bit PCM in some cases."""
+    raw = path + (".src.wav" if audio_bytes[:4] == b"RIFF" else ".pcm")
     with open(raw, "wb") as f:
         f.write(audio_bytes)
-    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(rate), "-ac", "1", "-i", raw, path])
+    fmt = () if raw.endswith(".wav") else ("-f", "s16le", "-ar", str(rate), "-ac", "1")
+    normalize(raw, path, fmt)
+    os.remove(raw)
 
 
 def join_to_mp3(paths, out_path, workdir):
-    """Concatenate segment files (all WAV or all MP3) with a short pause between them, encode one MP3."""
-    ext = os.path.splitext(paths[0])[1]
-    silence = os.path.join(workdir, "silence" + ext)
-    codec = ["-c:a", "pcm_s16le"] if ext == ".wav" else ["-c:a", "libmp3lame", "-b:a", "48k"]
+    """Concatenate normalised WAV pieces with a short pause between them; encode one CBR MP3
+    without ID3/Xing headers, so every frame has the same size (the dashboard streams by frames)."""
+    silence = os.path.join(workdir, "silence.wav")
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"anullsrc=r={SAMPLE_RATE}:cl=mono",
-         "-t", str(PAUSE_SEC), *codec, silence])
+         "-t", str(PAUSE_SEC), "-c:a", "pcm_s16le", "-fflags", "+bitexact", silence])
     listfile = os.path.join(workdir, "list.txt")
     with open(listfile, "w", encoding="utf-8") as f:
         for i, p in enumerate(paths):
@@ -150,7 +248,40 @@ def join_to_mp3(paths, out_path, workdir):
                 f.write(f"file '{silence}'\n")
             f.write(f"file '{p}'\n")
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", listfile,
-         "-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "libmp3lame", "-b:a", "64k", out_path])
+         "-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "libmp3lame", "-b:a", f"{BITRATE_K}k",
+         "-write_xing", "0", "-id3v2_version", "0", "-map_metadata", "-1", out_path])
+
+
+_BITRATES_V2 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]  # MPEG-2/2.5 Layer III
+_BITRATES_V1 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+_RATES = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000]}
+
+
+def mp3_layout(data):
+    """Where the audio frames start, and each frame's size/duration (CBR file)."""
+    pos = 0
+    if data[:3] == b"ID3":
+        size = ((data[6] & 0x7F) << 21) | ((data[7] & 0x7F) << 14) | ((data[8] & 0x7F) << 7) | (data[9] & 0x7F)
+        pos = 10 + size
+    while pos + 4 <= len(data):
+        b1, b2, b3 = data[pos + 1], data[pos + 2], data[pos + 3]
+        if data[pos] == 0xFF and (b1 & 0xE0) == 0xE0:
+            ver = (b1 >> 3) & 3
+            if ver != 1 and ((b1 >> 1) & 3) == 1:  # Layer III
+                br_i, sr_i = b2 >> 4, (b2 >> 2) & 3
+                if 0 < br_i < 15 and sr_i < 3:
+                    rate = _RATES[ver][sr_i]
+                    kbps = (_BITRATES_V1 if ver == 3 else _BITRATES_V2)[br_i]
+                    samples = 1152 if ver == 3 else 576
+                    frame_bytes = samples // 8 * kbps * 1000 // rate
+                    frame = data[pos:pos + frame_bytes]
+                    if b"Xing" in frame[:64] or b"Info" in frame[:64]:
+                        pos += frame_bytes  # skip the tag frame
+                        continue
+                    return {"audioStart": pos, "frameBytes": frame_bytes,
+                            "frameSec": samples / rate, "sampleRate": rate, "bitrate": kbps}
+        pos += 1
+    raise RuntimeError("could not find MP3 frames in the output")
 
 
 # ---------------- Gemini ----------------
@@ -206,8 +337,8 @@ def _retry_delay(resp, attempt):
 _WORKING = None  # (model, shape) that last succeeded — tried first so later chunks don't waste requests
 
 
-def gemini_chunk(turns):
-    """One request (up to 2 speakers) -> audio bytes. Tries each model and both API shapes."""
+def gemini_request(turns):
+    """One request (up to 2 speakers) -> (audio bytes, sample rate). Tries each model and both API shapes."""
     global _WORKING
     headers = {"x-goog-api-key": GEMINI_KEY, "Content-Type": "application/json"}
     errors = []
@@ -239,19 +370,25 @@ def gemini_chunk(turns):
     raise RuntimeError("Gemini TTS failed — " + " | ".join(errors[-4:]))
 
 
-def build_gemini(segments, workdir):
-    if not GEMINI_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not set")
-    chunks = chunk_turns(segments, GEMINI_CHUNK_CHARS)
-    print(f"Gemini: {len(chunks)} request(s), voices {GEMINI_MALE}/{GEMINI_FEMALE}, models {GEMINI_MODELS}")
-    paths = []
-    for i, turns in enumerate(chunks):
-        audio, rate = gemini_chunk(turns)
-        p = os.path.join(workdir, f"g_{i:04d}.wav")
-        to_wav(audio, p, rate)
-        paths.append(p)
-        print(f"  chunk {i + 1}/{len(chunks)} done")
-    return paths
+def gemini_pieces(turns, workdir, tag, depth=0):
+    """Read one chunk with Gemini -> list of normalised WAV paths. If the audio came back
+    suspiciously short (the model stopped early), split the chunk in two and read each half."""
+    audio, rate = gemini_request(turns)
+    path = os.path.join(workdir, f"g_{tag}.wav")
+    audio_bytes_to_wav(audio, path, rate)
+    chars = sum(len(t) for _, t in turns)
+    secs = wav_seconds(path)
+    if chars > MIN_CHARS_FOR_CHECK and secs < chars / CHARS_PER_SEC_MAX:
+        if depth >= MAX_SPLIT_DEPTH:
+            annotate("warning", f"Gemini audio still looks cut short after {depth} split(s) "
+                                f"({chars} chars -> {secs:.0f}s); keeping it")
+            return [path]
+        annotate("warning", f"Gemini audio looks cut short ({chars} chars -> {secs:.0f}s); splitting and retrying")
+        os.remove(path)
+        a, b = halve(turns)
+        return (gemini_pieces(a, workdir, tag + "a", depth + 1) +
+                gemini_pieces(b, workdir, tag + "b", depth + 1))
+    return [path]
 
 
 # ---------------- Microsoft (edge-tts) ----------------
@@ -270,52 +407,103 @@ async def _ms_one(text, voice, path):
     raise RuntimeError(f"Microsoft voice service failed after 4 attempts: {last}")
 
 
-async def _ms_all(segments, workdir):
+async def _ms_all(turns, workdir, tag):
     sem = asyncio.Semaphore(MS_CONCURRENCY)
-    paths = [os.path.join(workdir, f"m_{i:04d}.mp3") for i in range(len(segments))]
+    mp3s = [os.path.join(workdir, f"m_{tag}_{i:03d}.mp3") for i in range(len(turns))]
 
     async def one(i, spk, text):
         async with sem:
-            await _ms_one(text, MS_MALE if spk == "male" else MS_FEMALE, paths[i])
+            await _ms_one(text, MS_MALE if spk == "male" else MS_FEMALE, mp3s[i])
 
-    await asyncio.gather(*(one(i, s, t) for i, (s, t) in enumerate(segments)))
-    return paths
+    await asyncio.gather(*(one(i, s, t) for i, (s, t) in enumerate(turns)))
+    return mp3s
 
 
-def build_microsoft(segments, workdir):
-    print(f"Microsoft: {len(segments)} turn(s), voices {MS_MALE}/{MS_FEMALE}")
-    return asyncio.run(_ms_all(segments, workdir))
+def microsoft_pieces(turns, workdir, tag):
+    """Read one chunk with Farid / Dilara (one request per turn) -> list of normalised WAV paths."""
+    wavs = []
+    for mp3 in asyncio.run(_ms_all(turns, workdir, tag)):
+        wav = mp3[:-4] + ".wav"
+        normalize(mp3, wav)
+        os.remove(mp3)
+        wavs.append(wav)
+    return wavs
 
 
 # ---------------- orchestration ----------------
+ENGINE_LABEL = {"gemini": f"Gemini ({GEMINI_MALE} / {GEMINI_FEMALE})", "microsoft": "Microsoft Farid / Dilara"}
+
+
 def build_mp3(text, engine=ENGINE):
-    """Returns (mp3_bytes, engine_actually_used)."""
+    """Returns (mp3_bytes, meta). meta: duration, engine, note, audioStart, frameBytes, frameSec, ..."""
     segments = parse_script(text)
     if not segments:
         raise RuntimeError("the script is empty")
-    male = sum(1 for s, _ in segments if s == "male")
-    print(f"{len(segments)} turn(s): {male} male, {len(segments) - male} female, "
-          f"{sum(len(t) for _, t in segments)} characters")
-    order = {"gemini": ["gemini"], "microsoft": ["microsoft"]}.get(engine, ["gemini", "microsoft"])
-    notes = []
-    for eng in order:
-        with tempfile.TemporaryDirectory() as workdir:
-            try:
-                paths = build_gemini(segments, workdir) if eng == "gemini" else build_microsoft(segments, workdir)
-                out = os.path.join(workdir, "podcast.mp3")
-                join_to_mp3(paths, out, workdir)
-                with open(out, "rb") as f:
-                    data = f.read()
-                print(f"MP3 built with {eng}: {len(data) / 1e6:.2f} MB")
-                annotate("notice", f"MP3 built with {eng}: {len(data) / 1e6:.2f} MB, {len(segments)} turn(s)")
-                return data, eng
-            except Exception as e:
-                notes.append(f"{eng}: {e}")
-                print(f"{eng} failed: {e}")
-                annotate("warning", f"{eng} failed: {str(e)[:400]}")
-    raise RuntimeError("; ".join(notes))
+    total_chars = sum(len(t) for _, t in segments)
+    chunks = chunk_turns(segments, CHUNK_CHARS)
+    print(f"{len(segments)} turn(s), {total_chars} characters, {len(chunks)} chunk(s) of up to {CHUNK_CHARS}")
+
+    use_gemini = engine in ("auto", "gemini")
+    reason = ""
+    if use_gemini and not GEMINI_KEY:
+        if engine == "gemini":
+            raise RuntimeError("GEMINI_API_KEY is not set")
+        use_gemini, reason = False, "no Gemini key"
+
+    started = time.time()
+    with tempfile.TemporaryDirectory() as workdir:
+        pieces = []            # (engine, wav path) in playback order
+        for i, turns in enumerate(chunks):
+            tag = f"{i:03d}"
+            if use_gemini and engine == "auto" and time.time() - started > GEMINI_TIME_BUDGET:
+                use_gemini, reason = False, "Gemini time budget"
+                annotate("warning", f"Gemini time budget used up at chunk {i + 1}/{len(chunks)}; Microsoft reads the rest")
+            if use_gemini:
+                progress(f"Gemini: chunk {i + 1}/{len(chunks)}", force=(i == 0))
+                try:
+                    pieces += [("gemini", p) for p in gemini_pieces(turns, workdir, tag)]
+                    continue
+                except Exception as e:
+                    if engine == "gemini":
+                        raise
+                    reason = "Gemini daily limit" if isinstance(e, QuotaExhausted) else "Gemini error"
+                    annotate("warning", f"Gemini stopped at chunk {i + 1}/{len(chunks)} ({str(e)[:300]}); "
+                                        f"Microsoft reads the remaining {len(chunks) - i} chunk(s)")
+                    use_gemini = False
+            progress(f"Microsoft Farid / Dilara: chunk {i + 1}/{len(chunks)}", force=True)
+            pieces += [("microsoft", p) for p in microsoft_pieces(turns, workdir, tag)]
+
+        progress("Encoding the MP3", force=True)
+        out = os.path.join(workdir, "podcast.mp3")
+        join_to_mp3([p for _, p in pieces], out, workdir)
+        with open(out, "rb") as f:
+            data = f.read()
+
+        # where did the engine change (for the note under the player)?
+        t, switch_at = 0.0, None
+        for k, (eng, p) in enumerate(pieces):
+            if k and eng != pieces[k - 1][0] and switch_at is None:
+                switch_at = t
+            t += wav_seconds(p) + PAUSE_SEC
+        engines_used = {e for e, _ in pieces}
+
+    layout = mp3_layout(data)
+    frames = (len(data) - layout["audioStart"]) // layout["frameBytes"]
+    duration = frames * layout["frameSec"]
+    if engines_used == {"gemini", "microsoft"}:
+        used = "mixed"
+        note = f"Gemini until {fmt_time(switch_at)}, then Microsoft Farid / Dilara ({reason})"
+    else:
+        used = engines_used.pop()
+        note = "Voices: " + ENGINE_LABEL[used] + (f" ({reason})" if used == "microsoft" and reason else "")
+    meta = {"duration": round(duration, 2), "engine": used, "note": note, "size": len(data), **layout}
+    msg = f"MP3 built: {len(data) / 1e6:.2f} MB, {fmt_time(duration)}, {note}"
+    print(msg)
+    annotate("notice", msg)
+    return data, meta
 
 
+# ---------------- Apps Script / Drive ----------------
 def _gas_json(r, what):
     if r.status_code >= 400:
         raise RuntimeError(f"Apps Script {what}: HTTP {r.status_code} {r.text[:300]}")
@@ -339,6 +527,44 @@ def gas_post(data):
     return res
 
 
+def upload_to_drive(upload_url, data):
+    """Resumable upload into the session Apps Script opened (the URL itself is the permission).
+    Returns the new file's id."""
+    _SECRET_URLS.append(upload_url)
+    total, pos = len(data), 0
+    while pos < total:
+        end = min(pos + UPLOAD_CHUNK, total)
+        for attempt in range(5):
+            try:
+                r = requests.put(upload_url, data=data[pos:end], timeout=300, headers={
+                    "Content-Length": str(end - pos), "Content-Range": f"bytes {pos}-{end - 1}/{total}"})
+            except requests.RequestException as e:
+                r, err = None, e
+            else:
+                err = None
+            if r is not None and r.status_code in (200, 201):
+                return r.json()["id"]
+            if r is not None and r.status_code == 308:
+                rng = r.headers.get("Range")  # e.g. "bytes=0-8388607": what Drive actually has
+                pos = int(rng.split("-")[1]) + 1 if rng else 0
+                break
+            if r is not None and r.status_code < 500 and r.status_code != 429:
+                raise RuntimeError(f"Drive upload: HTTP {r.status_code} {r.text[:200]}")
+            time.sleep(5 * (attempt + 1))
+            # ask Drive how far it got before retrying
+            q = requests.put(upload_url, timeout=60, headers={"Content-Length": "0", "Content-Range": f"bytes */{total}"})
+            if q.status_code in (200, 201):
+                return q.json()["id"]
+            if q.status_code == 308:
+                rng = q.headers.get("Range")
+                pos = int(rng.split("-")[1]) + 1 if rng else 0
+                end = min(pos + UPLOAD_CHUNK, total)
+        else:
+            raise RuntimeError(f"Drive upload kept failing: {err or (r.status_code if r is not None else '')}")
+        progress(f"Uploading to Drive: {pos * 100 // total}%")
+    raise RuntimeError("Drive upload ended without a file id")
+
+
 def main():
     if JOB_ID:
         if not GAS_URL or not SECRET:
@@ -351,17 +577,21 @@ def main():
                 raise RuntimeError(info.get("message", info.get("status")))
             annotate("notice", f"Script received: {len(info.get('text', ''))} characters")
             stage = "building the audio"
-            data, used = build_mp3(info["text"])
+            data, meta = build_mp3(info["text"])
+            stage = "opening the Drive upload"
+            progress("Uploading to Drive: 0%", force=True)
+            up = gas_post({"action": "ttsupload", "job": JOB_ID, "secret": SECRET, "size": str(len(data))})
             stage = "uploading the MP3 to Drive"
-            payload = base64.b64encode(data).decode("ascii")
-            annotate("notice", f"Uploading {len(data) / 1e6:.2f} MB MP3 ({len(payload) / 1e6:.2f} MB as base64) to Drive")
-            res = gas_post({"action": "ttsresult", "job": JOB_ID, "secret": SECRET, "engine": used, "content": payload})
+            file_id = upload_to_drive(up["uploadUrl"], data)
+            stage = "finishing up in Apps Script"
+            res = gas_post({"action": "ttsdone", "job": JOB_ID, "secret": SECRET, "fileId": file_id,
+                            "meta": json.dumps(meta)})
             # the repo is public, so its run page is too: report the outcome only, never the script text
-            annotate("notice", f"Saved to Drive ({used}): {res.get('filename', res.get('status'))}")
+            annotate("notice", f"Saved to Drive: {res.get('filename', 'MP3')} — {meta['note']}")
         except Exception as e:
             msg = f"Failed while {stage}: {e}"
             annotate("error", msg[:900])
-            try:  # tell the dashboard right away instead of letting it wait for 15 minutes
+            try:  # tell the dashboard right away instead of letting it wait
                 gas_post({"action": "ttserror", "job": JOB_ID, "secret": SECRET, "message": redact(msg)[:500]})
             except Exception as e2:
                 annotate("error", f"Could not report the failure to Apps Script either: {e2}"[:900])
@@ -373,12 +603,12 @@ def main():
         made = 0
         for eng in engines:
             try:
-                data, _ = build_mp3(text, eng)
+                data, meta = build_mp3(text, eng)
                 with open(f"out/podcast_{eng}.mp3", "wb") as f:
                     f.write(data)
                 made += 1
             except Exception as e:
-                print(f"Test with {eng} failed: {e}")
+                annotate("warning", f"Test with {eng} failed: {e}"[:900])
         if not made:
             sys.exit("No engine produced audio — see the errors above.")
         print("Test MP3(s) written to out/ — download them from the run's Artifacts.")
