@@ -62,6 +62,22 @@ class QuotaExhausted(RuntimeError):
     """Gemini's daily free-tier cap is used up — no point retrying today."""
 
 
+def redact(msg):
+    """Never let the Apps Script URL or the secrets reach the (public) run page."""
+    msg = str(msg)
+    for s in (GAS_URL, SECRET, GEMINI_KEY):
+        if s:
+            msg = msg.replace(s, "<hidden>")
+    return re.sub(r"/macros/s/[A-Za-z0-9_-]+", "/macros/s/<hidden>", msg)
+
+
+def annotate(level, msg):
+    """Emit a GitHub Actions annotation (notice/warning/error). Annotations show on the run's
+    summary page even when the full log can't be opened, so every key step reports through them."""
+    msg = redact(msg).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::{level}::{msg}", flush=True)
+
+
 # ---------------- script parsing ----------------
 def clean(text):
     # Markdown marks (**bold**, # headings, `code`, > quotes) would otherwise be read aloud.
@@ -291,45 +307,65 @@ def build_mp3(text, engine=ENGINE):
                 with open(out, "rb") as f:
                     data = f.read()
                 print(f"MP3 built with {eng}: {len(data) / 1e6:.2f} MB")
+                annotate("notice", f"MP3 built with {eng}: {len(data) / 1e6:.2f} MB, {len(segments)} turn(s)")
                 return data, eng
             except Exception as e:
                 notes.append(f"{eng}: {e}")
                 print(f"{eng} failed: {e}")
+                annotate("warning", f"{eng} failed: {str(e)[:400]}")
     raise RuntimeError("; ".join(notes))
 
 
+def _gas_json(r, what):
+    if r.status_code >= 400:
+        raise RuntimeError(f"Apps Script {what}: HTTP {r.status_code} {r.text[:300]}")
+    try:
+        return r.json()
+    except ValueError:
+        # Apps Script answers script errors with an HTML page, not JSON — surface its text
+        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text)).strip()
+        raise RuntimeError(f"Apps Script {what}: not JSON — {text[:300]}")
+
+
 def gas_get(params):
-    r = requests.get(GAS_URL, params=params, timeout=90)
-    r.raise_for_status()
-    return r.json()
+    return _gas_json(requests.get(GAS_URL, params=params, timeout=90), params.get("action", "GET"))
 
 
 def gas_post(data):
     # Apps Script answers a POST with a redirect; the request is already processed by then.
-    r = requests.post(GAS_URL, data=data, timeout=300)
-    r.raise_for_status()
-    try:
-        return r.json()
-    except ValueError:
-        return {"status": "unknown"}
+    res = _gas_json(requests.post(GAS_URL, data=data, timeout=300), data.get("action", "POST"))
+    if res.get("status") == "error":
+        raise RuntimeError(f"Apps Script {data.get('action')}: {res.get('message', 'error')}")
+    return res
 
 
 def main():
     if JOB_ID:
         if not GAS_URL or not SECRET:
-            sys.exit("Repository secrets GAS_URL and TTS_SECRET must both be set.")
-        info = gas_get({"action": "ttsjob", "job": JOB_ID, "secret": SECRET})
-        if info.get("status") != "ok":
-            sys.exit(f"Could not fetch the script from Apps Script: {info.get('message', info.get('status'))}")
+            annotate("error", "Repository secrets GAS_URL and TTS_SECRET must both be set.")
+            sys.exit(1)
+        stage = "fetching the script from Apps Script"
         try:
+            info = gas_get({"action": "ttsjob", "job": JOB_ID, "secret": SECRET})
+            if info.get("status") != "ok":
+                raise RuntimeError(info.get("message", info.get("status")))
+            annotate("notice", f"Script received: {len(info.get('text', ''))} characters")
+            stage = "building the audio"
             data, used = build_mp3(info["text"])
+            stage = "uploading the MP3 to Drive"
+            payload = base64.b64encode(data).decode("ascii")
+            annotate("notice", f"Uploading {len(data) / 1e6:.2f} MB MP3 ({len(payload) / 1e6:.2f} MB as base64) to Drive")
+            res = gas_post({"action": "ttsresult", "job": JOB_ID, "secret": SECRET, "engine": used, "content": payload})
+            # the repo is public, so its run page is too: report the outcome only, never the script text
+            annotate("notice", f"Saved to Drive ({used}): {res.get('filename', res.get('status'))}")
         except Exception as e:
-            gas_post({"action": "ttserror", "job": JOB_ID, "secret": SECRET, "message": str(e)[:500]})
-            raise
-        res = gas_post({"action": "ttsresult", "job": JOB_ID, "secret": SECRET, "engine": used,
-                        "content": base64.b64encode(data).decode("ascii")})
-        # the repo is public, so its Actions logs are too: log the outcome only, never the script text
-        print(f"Uploaded to Drive ({used}): {res.get('filename', res.get('status'))}")
+            msg = f"Failed while {stage}: {e}"
+            annotate("error", msg[:900])
+            try:  # tell the dashboard right away instead of letting it wait for 15 minutes
+                gas_post({"action": "ttserror", "job": JOB_ID, "secret": SECRET, "message": redact(msg)[:500]})
+            except Exception as e2:
+                annotate("error", f"Could not report the failure to Apps Script either: {e2}"[:900])
+            sys.exit(1)
     else:
         text = (os.environ.get("SCRIPT_TEXT") or "").replace("\\n", "\n")
         os.makedirs("out", exist_ok=True)
