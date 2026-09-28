@@ -316,7 +316,8 @@ def find_audio(obj):
     return found[-1] if found else (None, None)
 
 
-def _gemini_bodies(model, turns):
+def _gemini_bodies(model, turns, male_voice=None):
+    male_voice = male_voice or GEMINI_MALE
     names = {"male": "Man", "female": "Woman"}
     interactions = {
         "model": model,
@@ -326,14 +327,14 @@ def _gemini_bodies(model, turns):
             for s, t in turns]}],
         "response_format": {"type": "audio"},
         "generation_config": {"speech_config": {"mode": "conversational", "speakers": [
-            {"speaker": "Man", "voice": GEMINI_MALE}, {"speaker": "Woman", "voice": GEMINI_FEMALE}]}},
+            {"speaker": "Man", "voice": male_voice}, {"speaker": "Woman", "voice": GEMINI_FEMALE}]}},
     }
     legacy = {
         "contents": [{"role": "user", "parts": [
             {"text": t, "speech_metadata": {"speaker": names[s], "style": STYLE[s]}} for s, t in turns]}],
         "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"multiSpeakerVoiceConfig": {
             "speakerVoiceConfigs": [
-                {"speaker": "Man", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_MALE}}},
+                {"speaker": "Man", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": male_voice}}},
                 {"speaker": "Woman", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_FEMALE}}}]}}},
     }
     return [("interactions", f"{API}/interactions", interactions),
@@ -345,15 +346,16 @@ def _retry_delay(resp, attempt):
     return min(int(m.group(1)) + 2, 90) if m else 15 * (attempt + 1)
 
 
+_LAST_MODEL = [""]  # model that answered the most recent request (reported per chunk)
 _WORKING = None  # (model, shape) that last succeeded — tried first so later chunks don't waste requests
 
 
-def gemini_request(turns):
+def gemini_request(turns, male_voice=None):
     """One request (up to 2 speakers) -> (audio bytes, sample rate). Tries each model and both API shapes."""
     global _WORKING
     headers = {"x-goog-api-key": GEMINI_KEY, "Content-Type": "application/json"}
     errors = []
-    candidates = [(model, shape, url, body) for model in GEMINI_MODELS for shape, url, body in _gemini_bodies(model, turns)]
+    candidates = [(model, shape, url, body) for model in GEMINI_MODELS for shape, url, body in _gemini_bodies(model, turns, male_voice)]
     candidates.sort(key=lambda c: (c[0], c[1]) != _WORKING)  # stable: known-good first, rest keep their order
     for model, shape, url, body in candidates:
         for attempt in range(5):
@@ -362,6 +364,7 @@ def gemini_request(turns):
                 data, mime = find_audio(resp.json())
                 if data:
                     _WORKING = (model, shape)
+                    _LAST_MODEL[0] = model
                     rate = re.search(r"rate=(\d+)", mime or "")
                     return base64.b64decode(data), int(rate.group(1)) if rate else SAMPLE_RATE
                 errors.append(f"{model}/{shape}: 200 but no audio in the response")
@@ -381,10 +384,11 @@ def gemini_request(turns):
     raise RuntimeError("Gemini TTS failed — " + " | ".join(errors[-4:]))
 
 
-def gemini_pieces(turns, workdir, tag, depth=0):
-    """Read one chunk with Gemini -> list of normalised WAV paths. If the audio came back
+def gemini_pieces(turns, workdir, tag, depth=0, male_voice=None):
+    """Read one chunk with Gemini -> list of (normalised WAV path, model). If the audio came back
     suspiciously short (the model stopped early), split the chunk in two and read each half."""
-    audio, rate = gemini_request(turns)
+    audio, rate = gemini_request(turns, male_voice)
+    model = _LAST_MODEL[0]
     path = os.path.join(workdir, f"g_{tag}.wav")
     audio_bytes_to_wav(audio, path, rate)
     chars = sum(len(t) for _, t in turns)
@@ -393,13 +397,13 @@ def gemini_pieces(turns, workdir, tag, depth=0):
         if depth >= MAX_SPLIT_DEPTH:
             annotate("warning", f"Gemini audio still looks cut short after {depth} split(s) "
                                 f"({chars} chars -> {secs:.0f}s); keeping it")
-            return [path]
+            return [(path, model)]
         annotate("warning", f"Gemini audio looks cut short ({chars} chars -> {secs:.0f}s); splitting and retrying")
         os.remove(path)
         a, b = halve(turns)
-        return (gemini_pieces(a, workdir, tag + "a", depth + 1) +
-                gemini_pieces(b, workdir, tag + "b", depth + 1))
-    return [path]
+        return (gemini_pieces(a, workdir, tag + "a", depth + 1, male_voice) +
+                gemini_pieces(b, workdir, tag + "b", depth + 1, male_voice))
+    return [(path, model)]
 
 
 # ---------------- Microsoft (edge-tts) ----------------
@@ -445,11 +449,76 @@ def microsoft_pieces(turns, workdir, tag):
 ENGINE_LABEL = {"gemini": f"Gemini ({GEMINI_MALE} / {GEMINI_FEMALE})", "microsoft": "Microsoft Farid / Dilara"}
 
 
+VOICE_TEST_RE = re.compile(r"^\s*VOICES\s*:\s*(.+)$", re.IGNORECASE)
+
+
+def split_voice_test(text):
+    """A first line "VOICES: Puck, Achird, ..." asks for a male-voice audition instead of a podcast."""
+    lines = text.strip().splitlines()
+    m = VOICE_TEST_RE.match(lines[0]) if lines else None
+    if not m:
+        return [], text
+    voices = []
+    for v in re.split(r"[,،\s]+", m.group(1)):
+        v = v.strip().capitalize()
+        if re.fullmatch(r"[A-Z][a-z]{2,20}", v) and v not in voices:
+            voices.append(v)
+    return voices[:6], "\n".join(lines[1:])
+
+
+def build_voice_test(voices, segments):
+    """The same sample read once per male voice (the woman stays the same), one after another."""
+    sample = chunk_turns(segments, CHUNK_CHARS)[0]
+    if len(sample) < len(segments):
+        annotate("notice", f"Voice test uses only the first {len(sample)} turn(s) of the sample")
+    if not GEMINI_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+    with tempfile.TemporaryDirectory() as workdir:
+        gap = os.path.join(workdir, "gap.wav")
+        run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"anullsrc=r={SAMPLE_RATE}:cl=mono",
+             "-t", "1.5", "-c:a", "pcm_s16le", "-fflags", "+bitexact", gap])
+        paths, marks, t = [], [], 0.0
+        for i, v in enumerate(voices):
+            progress(f"Voice test: {v} ({i + 1}/{len(voices)})", force=True)
+            try:
+                got = [p for p, _ in gemini_pieces(sample, workdir, f"v{i}", male_voice=v)]
+            except QuotaExhausted:
+                marks += [f"{x} — not tested (Gemini daily limit)" for x in voices[i:]]
+                annotate("warning", "Gemini daily limit reached during the voice test")
+                break
+            except Exception as e:
+                marks.append(f"{v} — failed")
+                annotate("warning", f"Voice {v} failed: {str(e)[:300]}")
+                continue
+            if paths:
+                paths.append(gap)
+                t += wav_seconds(gap) + PAUSE_SEC
+            marks.append(f"{v} {fmt_time(t)}")
+            for p in got:
+                paths.append(p)
+                t += wav_seconds(p) + PAUSE_SEC
+        if not paths:
+            raise RuntimeError("no voice could be tested — " + "; ".join(marks))
+        progress("Encoding the MP3", force=True)
+        out = os.path.join(workdir, "podcast.mp3")
+        join_to_mp3(paths, out, workdir)
+        with open(out, "rb") as f:
+            data = f.read()
+    layout = mp3_layout(data)
+    duration = (len(data) - layout["audioStart"]) // layout["frameBytes"] * layout["frameSec"]
+    note = f"Voice test (man; woman = {GEMINI_FEMALE}): " + " · ".join(marks)
+    annotate("notice", note)
+    return data, {"duration": round(duration, 2), "engine": "gemini", "note": note, "size": len(data), **layout}
+
+
 def build_mp3(text, engine=ENGINE):
     """Returns (mp3_bytes, meta). meta: duration, engine, note, audioStart, frameBytes, frameSec, ..."""
+    voices, text = split_voice_test(text)
     segments = parse_script(text)
     if not segments:
         raise RuntimeError("the script is empty")
+    if voices:
+        return build_voice_test(voices, segments)
     total_chars = sum(len(t) for _, t in segments)
     chunks = chunk_turns(segments, CHUNK_CHARS)
     print(f"{len(segments)} turn(s), {total_chars} characters, {len(chunks)} chunk(s) of up to {CHUNK_CHARS}")
@@ -463,7 +532,7 @@ def build_mp3(text, engine=ENGINE):
 
     started = time.time()
     with tempfile.TemporaryDirectory() as workdir:
-        pieces = []            # (engine, wav path) in playback order
+        pieces = []            # (engine, wav path, chunk no., model) in playback order
         for i, turns in enumerate(chunks):
             tag = f"{i:03d}"
             if use_gemini and engine == "auto" and time.time() - started > GEMINI_TIME_BUDGET:
@@ -472,7 +541,7 @@ def build_mp3(text, engine=ENGINE):
             if use_gemini:
                 progress(f"Gemini: chunk {i + 1}/{len(chunks)}", force=(i == 0))
                 try:
-                    pieces += [("gemini", p) for p in gemini_pieces(turns, workdir, tag)]
+                    pieces += [("gemini", p, i + 1, m) for p, m in gemini_pieces(turns, workdir, tag)]
                     continue
                 except Exception as e:
                     if engine == "gemini":
@@ -482,21 +551,30 @@ def build_mp3(text, engine=ENGINE):
                                         f"Microsoft reads the remaining {len(chunks) - i} chunk(s)")
                     use_gemini = False
             progress(f"Microsoft Farid / Dilara: chunk {i + 1}/{len(chunks)}", force=True)
-            pieces += [("microsoft", p) for p in microsoft_pieces(turns, workdir, tag)]
+            pieces += [("microsoft", p, i + 1, "microsoft") for p in microsoft_pieces(turns, workdir, tag)]
 
         progress("Encoding the MP3", force=True)
         out = os.path.join(workdir, "podcast.mp3")
-        join_to_mp3([p for _, p in pieces], out, workdir)
+        join_to_mp3([p[1] for p in pieces], out, workdir)
         with open(out, "rb") as f:
             data = f.read()
 
         # where did the engine change (for the note under the player)?
-        t, switch_at = 0.0, None
-        for k, (eng, p) in enumerate(pieces):
+        t, switch_at, starts = 0.0, None, []
+        for k, (eng, p, chunk, model) in enumerate(pieces):
             if k and eng != pieces[k - 1][0] and switch_at is None:
                 switch_at = t
+            if not k or chunk != pieces[k - 1][2] or model != pieces[k - 1][3]:
+                starts.append((chunk, t, model))
             t += wav_seconds(p) + PAUSE_SEC
-        engines_used = {e for e, _ in pieces}
+        engines_used = {p[0] for p in pieces}
+    # where each chunk starts and which model read it — to match a voice change heard in the MP3
+    short = lambda m: m.replace("gemini-", "")
+    annotate("notice", "Chunk start times: " + " · ".join(f"#{c} {fmt_time(t0)} {short(m)}" for c, t0, m in starts))
+    gem_models = sorted({p[3] for p in pieces if p[0] == "gemini"})
+    if len(gem_models) > 1:
+        annotate("warning", "Gemini used more than one model (" + ", ".join(gem_models) +
+                            ") — the voices may sound different where the model changes")
 
     layout = mp3_layout(data)
     frames = (len(data) - layout["audioStart"]) // layout["frameBytes"]
