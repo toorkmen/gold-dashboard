@@ -670,7 +670,7 @@
 
       <section class="panel">
         <h2>Previous Week's Levels (XAU/USD)</h2>
-        <p class="hint">High/Low from Monday 00:30 to Friday 00:30 (Tehran time). Spot Close is computed automatically as the close of the last candle in that window — not a live tick. Futures Close is auto-filled from the newest futures contract seen in the 5 days' futures fields (the contract next week trades on); you can still paste or type it. In a roll week the older contract is added as an extra "expiring" row for reference.</p>
+        <p class="hint">High/Low from Sunday's Globex open to Friday's Globex close (17:00 → 16:00 Chicago; in Tehran time Mon 01:30 → Sat 00:30 in US summer, Mon 02:30 → Sat 01:30 in US winter). Spot Close is computed automatically as the close of the last candle in that window — not a live tick. Futures Close is auto-filled from the newest futures contract seen in the 5 days' futures fields (the contract next week trades on); you can still paste or type it. In a roll week the older contract is added as an extra "expiring" row for reference.</p>
         <div class="field-row">
           <label>API key (free)</label>
           <input type="password" id="wlApiKey" placeholder="Your Twelve Data key" style="flex:1;min-width:220px;">
@@ -927,6 +927,56 @@ function timeToExpiryYearsCT(){
   const now = new Date();
   const hoursRemaining = (optionExpiryInstant(current0DTEExpiry(now)) - now) / 3600000;
   return hoursRemaining / 24 / 365;
+}
+
+// ---------- Market-anchored session boundaries (shift with US/UK daylight saving) ----------
+const ZONE_FMTS = {};
+function zoneParts(tz, date){
+  const f = ZONE_FMTS[tz] || (ZONE_FMTS[tz] = new Intl.DateTimeFormat('en-CA', {timeZone:tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false}));
+  const p = f.formatToParts(date), g = t => +p.find(x => x.type === t).value;
+  return {y:g('year'), mo:g('month'), d:g('day'), h:g('hour') % 24, mi:g('minute')};
+}
+// The instant that is hh:mm local time in `tz` on date ymd.
+function zonedInstant(tz, ymd, hh, mm){
+  const [y,m,d] = ymd.split('-').map(Number);
+  const target = Date.UTC(y, m-1, d, hh, mm);
+  let t = target;
+  for(let i = 0; i < 3; i++){
+    const p = zoneParts(tz, new Date(t));
+    t += target - Date.UTC(p.y, p.mo-1, p.d, p.h, p.mi);
+  }
+  return new Date(t);
+}
+function tehranStamp(date){
+  const p = zoneParts('Asia/Tehran', date), z = n => String(n).padStart(2,'0');
+  return `${p.y}-${z(p.mo)}-${z(p.d)} ${z(p.h)}:${z(p.mi)}:00`;
+}
+// Trading day D (Tehran date of the session). Each boundary is a real market event in its own local time:
+//   Pre-Tokyo  Globex open (17:00 Chicago, the evening before) -> Tokyo open (09:00 Tokyo)
+//   Tokyo      09:00 -> 15:00 Tokyo
+//   Pre-London end of Tokyo -> London open (08:00 London)          [kill zone]
+//   London     08:00 London -> 1h before the New York open (08:30 New York)
+//   Pre-NY     08:30 -> 09:30 New York                               [kill zone]
+//   New York   09:30 -> 16:00 New York
+//   End of day 16:00 New York -> Globex close (16:00 Chicago)
+function marketWindowsFor(dateD){
+  const prev = ymdShift(dateD, -1);
+  const at = (tz, ymd, hh, mm) => tehranStamp(zonedInstant(tz, ymd, hh, mm));
+  const globexOpen = at('America/Chicago', prev, 17, 0);
+  const tokyoOpen = at('Asia/Tokyo', dateD, 9, 0), tokyoClose = at('Asia/Tokyo', dateD, 15, 0);
+  const londonOpen = at('Europe/London', dateD, 8, 0);
+  const nyKill = at('America/New_York', dateD, 8, 30), nyOpen = at('America/New_York', dateD, 9, 30), nyClose = at('America/New_York', dateD, 16, 0);
+  const globexClose = at('America/Chicago', dateD, 16, 0);
+  return {
+    PreTokyo:  [globexOpen, tokyoOpen],
+    Tokyo:     [tokyoOpen, tokyoClose],
+    PreLondon: [tokyoClose, londonOpen],
+    London:    [londonOpen, nyKill],
+    PreNY:     [nyKill, nyOpen],
+    NY:        [nyOpen, nyClose],
+    EndOfDay:  [nyClose, globexClose],
+    FullDay:   [globexOpen, globexClose],
+  };
 }
 
 // ---------- Options parser ----------
@@ -1814,17 +1864,9 @@ const SESSION_PERIODS = [
   {key:'EndOfDay',  label:'End-of-day (fake)'},
   {key:'FullDay',   label:'Full day'},
 ];
+// Boundaries follow the real markets and shift with US/UK daylight saving (see marketWindowsFor).
 function windowsFor(dateD, dateDplus1){
-  return {
-    PreTokyo:  [`${dateD} 01:30:00`, `${dateD} 03:30:00`],
-    Tokyo:     [`${dateD} 03:30:00`, `${dateD} 09:30:00`],
-    PreLondon: [`${dateD} 09:30:00`, `${dateD} 10:30:00`],
-    London:    [`${dateD} 10:30:00`, `${dateD} 16:00:00`],
-    PreNY:     [`${dateD} 16:00:00`, `${dateD} 17:00:00`],
-    NY:        [`${dateD} 17:00:00`, `${dateD} 23:30:00`],
-    EndOfDay:  [`${dateD} 23:30:00`, `${dateDplus1} 00:30:00`],
-    FullDay:   [`${dateD} 01:30:00`, `${dateDplus1} 00:30:00`],
-  };
+  return marketWindowsFor(dateD);
 }
 function buildRow(bars, dateD, dateDplus1, nowStr){
   const w = windowsFor(dateD, dateDplus1);
@@ -1979,7 +2021,7 @@ function buildSessionCsv(){
   const yEl = document.getElementById('sessionTableYesterday');
   const tEl = document.getElementById('sessionTableToday');
   if(!yEl || !tEl || !yEl.querySelector('tbody')) return null;
-  const noteLine = '# Data source: Twelve Data, symbol XAU/USD, interval=15min (each High/Low/Close below is computed from 15-minute candles; times are Tehran time). CloseAtHigh/CloseAtLow = the close of that specific 15-min candle (a wick can still exceed it — use these to tell a wick apart from a confirmed close beyond a level).';
+  const noteLine = '# Data source: Twelve Data, symbol XAU/USD, interval=15min (each High/Low/Close below is computed from 15-minute candles; times are Tehran time). Period boundaries follow the real markets (Globex 17:00-16:00 Chicago, Tokyo 09:00-15:00, London open 08:00 London, New York kill zone 08:30 / open 09:30 / close 16:00 New York) and shift with US/UK daylight saving; Start/End show the actual Tehran times used that day. CloseAtHigh/CloseAtLow = the close of that specific 15-min candle (a wick can still exceed it — use these to tell a wick apart from a confirmed close beyond a level).';
   const header = ['Block','Period','Start','End','High','HighTime','CloseAtHigh','Low','LowTime','CloseAtLow','Close','CloseTime','Futures','SpotAtTime'];
   const yRows = readPeriodsTableFromDom(yEl).map(r => ['Yesterday', r.period, r.start, r.end, r.high, r.highTime, r.closeAtHigh, r.low, r.lowTime, r.closeAtLow, r.close, r.closeTime, '', '']);
   const tRows = readPeriodsTableFromDom(tEl).map(r => ['Today', r.period, r.start, r.end, r.high, r.highTime, r.closeAtHigh, r.low, r.lowTime, r.closeAtLow, r.close, r.closeTime, '', '']);
@@ -2494,16 +2536,17 @@ document.getElementById('wlFetchBtn').addEventListener('click', async () => {
     const today = tehranDateStr(new Date());
     const prevMonday = getLastCompletedWeekMonday(today);
     const prevFriday = addDays(prevMonday, 4);   // used only for the "Week" label (Mon–Fri)
-    const windowEnd = addDays(prevMonday, 5);    // actual cutoff = Saturday 00:30
+    // Week = Sunday's Globex open (17:00 Chicago) -> Friday's Globex close (16:00 Chicago), in Tehran time —
+    // shifts with US daylight saving (summer Mon 01:30 -> Sat 00:30, winter Mon 02:30 -> Sat 01:30).
+    const start = tehranStamp(zonedInstant('America/Chicago', addDays(prevMonday, -1), 17, 0));
+    const end = tehranStamp(zonedInstant('America/Chicago', prevFriday, 16, 0));
 
-    const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=15min&start_date=${encodeURIComponent(prevMonday+' 00:00:00')}&end_date=${encodeURIComponent(windowEnd+' 01:00:00')}&timezone=Asia/Tehran&apikey=${encodeURIComponent(key)}`;
+    const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=15min&start_date=${encodeURIComponent(addMinutesToDatetimeStr(start, -30))}&end_date=${encodeURIComponent(addMinutesToDatetimeStr(end, 30))}&timezone=Asia/Tehran&apikey=${encodeURIComponent(key)}`;
     const res = await fetch(url);
     const json = await res.json();
     if(json.status === 'error' || !json.values || !json.values.length){ statusEl.textContent = 'API error: ' + (json.message || 'invalid response'); return; }
     const bars = json.values.map(v => ({datetime:v.datetime, high:v.high, low:v.low, close:v.close}));
 
-    const start = `${prevMonday} 00:30:00`;
-    const end = `${windowEnd} 00:30:00`;
     const inRange = bars.filter(b => b.datetime >= start && b.datetime < end);
 
     let highRow = {value:'—', day:'—', time:'—', closeThen:'—'};
@@ -2518,10 +2561,10 @@ document.getElementById('wlFetchBtn').addEventListener('click', async () => {
       lowRow  = {value: parseFloat(lowBar.low).toFixed(2),  day: weekdayName(lowBar.datetime.slice(0,10)),  time: lowBar.datetime.slice(11,16), closeThen: parseFloat(lowBar.close).toFixed(2)};
     }
 
-    // Spot Close = the single latest bar we have overall — since this is run after the Saturday 00:30
-    // close, this naturally IS the last real candle before the market shut, no window filtering needed.
-    let lastBar = bars[0];
-    bars.forEach(b => { if(b.datetime > lastBar.datetime) lastBar = b; });
+    // Spot Close = the last candle before Friday's Globex close.
+    const closeBars = inRange.length ? inRange : bars;
+    let lastBar = closeBars[0];
+    closeBars.forEach(b => { if(b.datetime > lastBar.datetime) lastBar = b; });
     const spotRow = { value: parseFloat(lastBar.close).toFixed(2), day: weekdayName(lastBar.datetime.slice(0,10)), time: lastBar.datetime.slice(11,16), closeThen:'—' };
 
     // Futures Close: latest value auto-detected from the 5 weekday tabs; Day/Time borrowed from Spot Close (per agreement).
@@ -2548,7 +2591,7 @@ document.getElementById('wlFetchBtn').addEventListener('click', async () => {
     document.getElementById('wlResultTable').innerHTML = html;
     document.getElementById('wlResultWrap').style.display = 'block';
     document.getElementById('wlActions').style.display = 'flex';
-    statusEl.textContent = `Done — window ${prevMonday} 00:30 to ${windowEnd} 00:30 (Tehran). Cells are editable — CSV/Drive always use whatever is currently shown.`;
+    statusEl.textContent = `Done — window ${start.slice(0,16)} to ${end.slice(0,16)} (Tehran; Sunday's Globex open to Friday's close). Cells are editable — CSV/Drive always use whatever is currently shown.`;
   }catch(err){
     statusEl.textContent = 'Error: ' + err.message;
   }
