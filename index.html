@@ -339,6 +339,54 @@
 
   <hr style="border:none;border-top:1px solid var(--border);margin:36px 0;">
 
+  <section class="panel" id="nextChainPanel">
+    <h2><span class="num">1b</span> Tomorrow's chain (next expiry)</h2>
+    <p class="hint">Do this right after today's chain (section 1/2): paste the next expiry's Options page and Volatility &amp; Greeks page here. It produces a separate file, <code>barchart_next_…csv</code>, with the same columns as today's file plus expiry details. Today's file is not affected.</p>
+    <div class="field-row">
+      <label for="nextExpiry">Expiry date</label>
+      <input type="text" id="nextExpiry" placeholder="YYYY-MM-DD" style="width:150px;">
+      <label for="nextType" style="min-width:auto;margin-inline-start:12px;">Type</label>
+      <select id="nextType" style="width:130px;"><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
+    </div>
+    <div id="nextExpiryNote" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);min-height:16px;margin:-4px 0 10px;"></div>
+    <div class="field-row">
+      <label for="nextFutures">Futures (this chain)</label>
+      <input type="text" id="nextFutures" placeholder="e.g. 4351.6" style="width:150px;">
+      <label for="nextContract" style="min-width:auto;margin-inline-start:12px;">Contract</label>
+      <input type="text" id="nextContract" placeholder="e.g. GCZ26" style="width:110px;">
+    </div>
+    <div id="nextFuturesNote" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);min-height:16px;margin:-4px 0 10px;"></div>
+    <p class="hint" style="margin:6px 0 6px;font-weight:600;">Options table (next expiry)</p>
+    <textarea id="nextOptionsInput" placeholder="Paste the next expiry's Options page here..."></textarea>
+    <div class="row-count" id="nextOptionsCount"></div>
+    <p class="hint" style="margin:12px 0 6px;font-weight:600;">Volatility &amp; Greeks table (next expiry)</p>
+    <textarea id="nextVolInput" placeholder="Paste the next expiry's Volatility &amp; Greeks page here..."></textarea>
+    <div class="row-count" id="nextVolCount"></div>
+    <div class="actions">
+      <button id="nextProcessBtn">Process tomorrow's chain</button>
+      <button id="nextDownloadBtn" style="background:var(--green);color:#0d1f16;display:none;">Download CSV</button>
+      <button id="nextDriveBtn" style="background:#4285F4;color:#fff;">Save to Google Drive</button>
+      <span id="nextStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
+    </div>
+    <div id="nextMismatchBox" style="display:none;margin:16px 0;padding:14px;background:#3a1f1f;border:1px solid #a33;border-radius:8px;">
+      <p id="nextMismatchMsg" style="margin:0 0 10px;color:#ffb4b4;font-weight:600;"></p>
+      <div class="actions" style="margin:0;">
+        <input id="nextMismatchInput" type="text" placeholder="Correct futures price (e.g. 4329.0)" style="max-width:220px;">
+        <button id="nextMismatchSubmitBtn">Use this value</button>
+        <button id="nextMismatchUseImpliedBtn" style="background:#4a4a1f;">Use parity-implied value</button>
+      </div>
+    </div>
+    <div id="nextWarnings" style="display:none;background:#231a15;border:1px solid var(--red);border-radius:6px;padding:14px 16px;font-family:var(--mono);font-size:12px;color:#e3b6a8;margin:12px 0 18px;white-space:pre-wrap;max-height:180px;overflow-y:auto;"></div>
+    <div id="nextPreview" style="display:none;">
+      <p class="hint" style="margin:0 0 6px;font-weight:600;">Preview (first 15 rows)</p>
+      <div class="scroll-x">
+        <table class="preview-table" id="nextPreviewTable"></table>
+      </div>
+    </div>
+  </section>
+
+  <hr style="border:none;border-top:1px solid var(--border);margin:36px 0;">
+
   <section class="panel">
     <h2><span class="num">3</span> Session High/Low &amp; Futures Snapshot (XAU/USD)</h2>
     <p class="hint">
@@ -744,6 +792,7 @@ const previewSection = document.getElementById('preview');
 const previewTable = document.getElementById('previewTable');
 
 let finalRows = null;
+let lastTodayFileStamp = null; // {stamp, at} of the last barchart_… file built
 let finalHeader = null;
 
 // ---------- helpers ----------
@@ -805,18 +854,78 @@ function black76Greeks(F,K,T,sigma,type){
   const gamma = normPDF(d1) / (F*sigma*sqrtT);
   return {delta, gamma};
 }
-// Hours remaining today until 12:30 PM CT (COMEX gold same-day option cutoff), converted to years.
-// Returns <=0 once past expiry.
+// ---------- CME gold-option expiry calendar ----------
+// Gold options (weekly and monthly) expire at 12:30 CT on the expiry day. Days with no CME settlement
+// have no expiry; they are skipped. Anything unusual can be corrected in the "Expiry date" field.
+const CME_NO_EXPIRY_DAYS = new Set([
+  '2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25','2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25',
+  '2027-01-01','2027-01-18','2027-02-15','2027-03-26','2027-05-31','2027-06-18','2027-07-05','2027-09-06','2027-11-25','2027-12-24'
+]);
+function ymdWeekday(ymd){ const [y,m,d] = ymd.split('-').map(Number); return new Date(Date.UTC(y,m-1,d)).getUTCDay(); }
+function ymdShift(ymd, n){ const [y,m,d] = ymd.split('-').map(Number); const t = new Date(Date.UTC(y,m-1,d)); t.setUTCDate(t.getUTCDate()+n); return t.toISOString().slice(0,10); }
+function isCmeBusinessDay(ymd){ const w = ymdWeekday(ymd); return w >= 1 && w <= 5 && !CME_NO_EXPIRY_DAYS.has(ymd); }
+function nextCmeBusinessDay(ymd){ let d = ymdShift(ymd, 1); while(!isCmeBusinessDay(d)) d = ymdShift(d, 1); return d; }
+function prevCmeBusinessDay(ymd){ let d = ymdShift(ymd, -1); while(!isCmeBusinessDay(d)) d = ymdShift(d, -1); return d; }
+const CHICAGO_FMT = new Intl.DateTimeFormat('en-CA', {timeZone:'America/Chicago', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false});
+function chicagoParts(date){
+  const p = CHICAGO_FMT.formatToParts(date), g = t => +p.find(x => x.type === t).value;
+  return {y:g('year'), mo:g('month'), d:g('day'), h:g('hour') % 24, mi:g('minute')};
+}
+function chicagoDateStr(date){ const p = chicagoParts(date); return `${p.y}-${String(p.mo).padStart(2,'0')}-${String(p.d).padStart(2,'0')}`; }
+// The instant that is hh:mm Chicago time on the given date — daylight saving handled by the browser's time zone data.
+function instantAtChicago(ymd, hh, mm){
+  const [y,m,d] = ymd.split('-').map(Number);
+  const target = Date.UTC(y, m-1, d, hh, mm);
+  let t = target + 6*3600*1000;
+  for(let i = 0; i < 3; i++){
+    const p = chicagoParts(new Date(t));
+    t += target - Date.UTC(p.y, p.mo-1, p.d, p.h, p.mi);
+  }
+  return new Date(t);
+}
+function optionExpiryInstant(ymd){ return instantAtChicago(ymd, 12, 30); }
+// Today's 0DTE expiry: today (Chicago date) if it is a business day and 12:30 CT hasn't passed yet;
+// otherwise the next business day (so Friday afternoon -> Monday, a holiday is skipped).
+function current0DTEExpiry(now){
+  now = now || new Date();
+  const today = chicagoDateStr(now);
+  if(isCmeBusinessDay(today) && now < optionExpiryInstant(today)) return today;
+  return nextCmeBusinessDay(today);
+}
+// Monthly gold options stop trading on the 4th last business day of the month before the contract
+// month; if that day is a Friday or the day before a holiday, the business day before it.
+function monthlyGoldExpiryInMonth(y, m){
+  let d = ymdShift(`${m === 12 ? y+1 : y}-${String(m === 12 ? 1 : m+1).padStart(2,'0')}-01`, -1); // last day of month
+  let count = 0;
+  while(true){ if(isCmeBusinessDay(d) && ++count === 4) break; d = ymdShift(d, -1); }
+  if(ymdWeekday(d) === 5 || CME_NO_EXPIRY_DAYS.has(ymdShift(d, 1))) d = prevCmeBusinessDay(d);
+  return d;
+}
+function isMonthlyGoldExpiry(ymd){ const [y,m] = ymd.split('-').map(Number); return monthlyGoldExpiryInMonth(y, m) === ymd; }
+// CME Globex gold is closed Fri 16:00 CT -> Sun 17:00 CT and every day 16:00-17:00 CT.
+function globexOpenAt(date){
+  const p = chicagoParts(date), w = new Date(Date.UTC(p.y, p.mo-1, p.d)).getUTCDay(), mins = p.h*60 + p.mi;
+  if(w === 6) return false;
+  if(w === 0) return mins >= 17*60;
+  if(w === 5) return mins < 16*60;
+  return !(mins >= 16*60 && mins < 17*60);
+}
+function tradingHoursBetween(from, to){
+  let open = 0;
+  for(let t = from.getTime(); t < to.getTime(); t += 60000){ if(globexOpenAt(new Date(t))) open++; }
+  return open / 60;
+}
+function tehranYmdHm(date){
+  const p = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Tehran', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false}).formatToParts(date);
+  const g = t => p.find(x => x.type === t).value;
+  return `${g('year')}-${g('month')}-${g('day')} ${String(+g('hour') % 24).padStart(2,'0')}:${g('minute')}`;
+}
+
+// Time to today's 0DTE expiry (12:30 CT), in years. After the cutoff it rolls to the NEXT expiry day —
+// Friday afternoon rolls to Monday (72h), a CME holiday is skipped.
 function timeToExpiryYearsCT(){
-  const fmt = new Intl.DateTimeFormat('en-US', {timeZone:'America/Chicago', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
-  const parts = fmt.formatToParts(new Date());
-  const g = t => +parts.find(p=>p.type===t).value;
-  const nowMinutes = g('hour')*60 + g('minute') + g('second')/60;
-  const expiryMinutes = 12*60 + 30;
-  let hoursRemaining = (expiryMinutes - nowMinutes) / 60;
-  // Past today's 12:30 CT (22:30 Tehran) cutoff — Barchart is now quoting TOMORROW's 0DTE contract,
-  // so the relevant expiry rolls forward by 24h instead of being treated as "already expired".
-  if(hoursRemaining <= 0) hoursRemaining += 24;
+  const now = new Date();
+  const hoursRemaining = (optionExpiryInstant(current0DTEExpiry(now)) - now) / 3600000;
   return hoursRemaining / 24 / 365;
 }
 
@@ -1303,6 +1412,7 @@ function buildMergedCsv(){
   const now = new Date();
   const pad = n => String(n).padStart(2,'0');
   const fname = `barchart_${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.csv`;
+  lastTodayFileStamp = {stamp: fname.slice(9, -4), at: now};
   return {csv, fname};
 }
 
@@ -1354,6 +1464,246 @@ driveBtn1.addEventListener('click', () => {
   const built = buildMergedCsv();
   if(!built){ statusEl.textContent = 'Nothing to send yet — process first.'; return; }
   postCsvToDrive(built.fname, built.csv, statusEl);
+});
+
+
+// ================= Tomorrow's chain (next expiry) — separate file, today's section untouched =================
+const nextEls = {
+  expiry: document.getElementById('nextExpiry'), type: document.getElementById('nextType'),
+  expiryNote: document.getElementById('nextExpiryNote'),
+  futures: document.getElementById('nextFutures'), contract: document.getElementById('nextContract'),
+  futuresNote: document.getElementById('nextFuturesNote'),
+  opt: document.getElementById('nextOptionsInput'), vol: document.getElementById('nextVolInput'),
+  optCount: document.getElementById('nextOptionsCount'), volCount: document.getElementById('nextVolCount'),
+  processBtn: document.getElementById('nextProcessBtn'), downloadBtn: document.getElementById('nextDownloadBtn'),
+  driveBtn: document.getElementById('nextDriveBtn'), status: document.getElementById('nextStatus'),
+  warnings: document.getElementById('nextWarnings'), preview: document.getElementById('nextPreview'),
+  previewTable: document.getElementById('nextPreviewTable'),
+  mismatchBox: document.getElementById('nextMismatchBox'), mismatchMsg: document.getElementById('nextMismatchMsg'),
+  mismatchInput: document.getElementById('nextMismatchInput')
+};
+const NEXT_MAX_PASTE_GAP_MIN = 2;
+const pasteTimes = {todayOptions: null, todayVol: null, nextOptions: null, nextVol: null};
+optionsInput.addEventListener('input', () => { pasteTimes.todayOptions = new Date(); });
+volInput.addEventListener('input', () => { pasteTimes.todayVol = new Date(); });
+let nextFinalHeader = null, nextFinalRows = null;
+
+// Default expiry = the business day after today's 0DTE expiry; type = monthly on CME's monthly expiry day.
+function setNextExpiryDefault(){
+  if(nextEls.expiry.dataset.manual === '1') return;
+  const ymd = nextCmeBusinessDay(current0DTEExpiry());
+  nextEls.expiry.value = ymd;
+  refreshNextExpiryNote(true);
+}
+function refreshNextExpiryNote(setType){
+  const ymd = nextEls.expiry.value.trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(ymd)){ nextEls.expiryNote.textContent = 'Enter the date as YYYY-MM-DD.'; nextEls.expiryNote.style.color = 'var(--red)'; return; }
+  if(setType && nextEls.type.dataset.manual !== '1') nextEls.type.value = isMonthlyGoldExpiry(ymd) ? 'monthly' : 'weekly';
+  const wd = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][ymdWeekday(ymd)];
+  const warn = isCmeBusinessDay(ymd) ? '' : ' — ⚠ not a CME business day';
+  nextEls.expiryNote.textContent = `${wd} ${ymd}, expires ${tehranYmdHm(optionExpiryInstant(ymd)).slice(11)} Tehran (12:30 CT)${warn}. Today's 0DTE: ${current0DTEExpiry()}.`;
+  nextEls.expiryNote.style.color = warn ? 'var(--red)' : 'var(--text-dim)';
+}
+nextEls.expiry.addEventListener('input', () => { nextEls.expiry.dataset.manual = '1'; refreshNextExpiryNote(true); });
+nextEls.type.addEventListener('change', () => { nextEls.type.dataset.manual = '1'; });
+setNextExpiryDefault();
+
+// Barchart text sometimes names the expiry ("Expires 09/29/26", "Expiration: 09/29/2026"): use it when present.
+function tryNextExpiryFromText(raw){
+  const m = String(raw || '').match(/expir\w*[^\n\d]{0,40}(\d{1,2})\/(\d{1,2})\/(\d{2,4})/i);
+  if(!m || nextEls.expiry.dataset.manual === '1') return;
+  const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
+  const ymd = `${y}-${String(+m[1]).padStart(2,'0')}-${String(+m[2]).padStart(2,'0')}`;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
+  nextEls.expiry.value = ymd;
+  refreshNextExpiryNote(true);
+  nextEls.expiryNote.textContent += ' (read from the pasted text)';
+}
+
+const nextAutoFutures = {Options: null, Volatility: null};
+function onNextPaste(which, raw){
+  pasteTimes[which === 'Options' ? 'nextOptions' : 'nextVol'] = new Date();
+  const o = parseOptions(nextEls.opt.value), v = parseVol(nextEls.vol.value);
+  const cnt = (rows) => `<b>${rows.filter(r=>r.OptionType==='Call').length} Call</b> · <b>${rows.filter(r=>r.OptionType==='Put').length} Put</b> found`;
+  nextEls.optCount.innerHTML = o.rows.length ? cnt(o.rows) : '';
+  nextEls.volCount.innerHTML = v.rows.length ? cnt(v.rows) : '';
+  tryNextExpiryFromText(raw);
+  const h = parseFuturesHeader(raw);
+  if(!h) return;
+  nextAutoFutures[which] = h;
+  const vals = Object.values(nextAutoFutures).filter(Boolean).map(s => s.value);
+  if(Math.max(...vals) - Math.min(...vals) > FUTURES_DIFF_THRESHOLD){
+    nextEls.futuresNote.textContent = `⚠ Options/Volatility headers disagree (${vals.join(' vs ')}) — check manually`;
+    nextEls.futuresNote.style.color = 'var(--red)';
+    return;
+  }
+  if(nextEls.futures.dataset.manual !== '1') nextEls.futures.value = h.value;
+  if(nextEls.contract.dataset.manual !== '1' && h.contract) nextEls.contract.value = h.contract;
+  nextEls.futuresNote.textContent = `auto from page header${h.contract ? ' (' + h.contract + ')' : ''}: ${h.value}`;
+  nextEls.futuresNote.style.color = 'var(--text-dim)';
+}
+nextEls.opt.addEventListener('input', () => onNextPaste('Options', nextEls.opt.value));
+nextEls.vol.addEventListener('input', () => onNextPaste('Volatility', nextEls.vol.value));
+nextEls.futures.addEventListener('input', () => { nextEls.futures.dataset.manual = '1'; });
+nextEls.contract.addEventListener('input', () => { nextEls.contract.dataset.manual = '1'; });
+
+function runNextProcessing(){
+  const W = [];
+  nextEls.status.textContent = 'Processing...';
+  nextEls.downloadBtn.style.display = 'none';
+  nextEls.warnings.style.display = 'none';
+  nextEls.preview.style.display = 'none';
+  nextEls.mismatchBox.style.display = 'none';
+  nextFinalRows = null;
+
+  const expiry = nextEls.expiry.value.trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(expiry)){ nextEls.status.textContent = 'Enter the expiry date as YYYY-MM-DD first.'; return; }
+  const o = parseOptions(nextEls.opt.value), v = parseVol(nextEls.vol.value);
+  W.push(...o.warnings, ...v.warnings);
+  if(!o.rows.length && !v.rows.length){ nextEls.status.textContent = 'No valid rows found. Please check the pasted text.'; return; }
+
+  const map = new Map();
+  o.rows.forEach(r => map.set(r.Strike+'|'+r.OptionType, {...r}));
+  v.rows.forEach(r => {
+    const key = r.Strike+'|'+r.OptionType;
+    const ex = map.get(key) || {Strike:r.Strike, OptionType:r.OptionType};
+    map.set(key, {...ex, IV:r.IV, Delta:r.Delta, Gamma:r.Gamma, Theta:r.Theta, Vega:r.Vega, IVSkew:r.IVSkew});
+  });
+  const rows = Array.from(map.values());
+
+  const now = new Date();
+  const expiryAt = optionExpiryInstant(expiry);
+  const hoursToExpiry = (expiryAt - now) / 3600000;
+  const T = hoursToExpiry / 24 / 365;
+  const tradingHours = hoursToExpiry > 0 ? tradingHoursBetween(now, expiryAt) : 0;
+  if(!isCmeBusinessDay(expiry)) W.push(`Expiry ${expiry} is not a CME business day — check the date.`);
+  const zeroDte = current0DTEExpiry(now);
+  if(expiry <= zeroDte) W.push(`Expiry ${expiry} is not after today's 0DTE expiry (${zeroDte}) — is this really the next chain?`);
+  else if(expiry !== nextCmeBusinessDay(zeroDte)) W.push(`Expiry ${expiry} is not the first business day after today's 0DTE (${zeroDte}) — fine if a listed expiry was skipped, otherwise check the date.`);
+
+  // same-moment check: today's and tomorrow's pastes should be at most 2 minutes apart
+  const times = Object.values(pasteTimes).filter(Boolean).map(t => t.getTime());
+  if(!pasteTimes.todayOptions && !pasteTimes.todayVol){
+    W.push("Today's chain was not pasted in this session — could not check that both chains were taken at the same moment.");
+  } else if(times.length > 1){
+    const span = (Math.max(...times) - Math.min(...times)) / 60000;
+    if(span > NEXT_MAX_PASTE_GAP_MIN) W.push(`Today's and tomorrow's pastes are ${span.toFixed(1)} minutes apart (limit ${NEXT_MAX_PASTE_GAP_MIN}) — the IV comparison between the two expiries is less reliable.`);
+  }
+
+  const F = parseFloat((nextEls.futures.value || '').replace(/,/g,''));
+  const hasF = Number.isFinite(F) && F > 0;
+  let uc = {status:'unknown'};
+  if(hasF){
+    uc = checkUnderlying(rows, F, 3);
+    if(uc.status === 'mismatch'){
+      nextEls.mismatchMsg.textContent = `Chain's implied underlying is about ${uc.implied.toFixed(1)}, but the entered F is ${F.toFixed(1)} (gap ${uc.gap.toFixed(1)}). The chain is likely priced on another contract month. Please enter that contract's futures price (and fix the Contract field).`;
+      nextEls.mismatchBox.dataset.implied = uc.implied.toFixed(2);
+      nextEls.mismatchBox.style.display = 'block';
+      nextEls.status.textContent = 'Stopped — underlying contract mismatch (see the message below).';
+      return;
+    }
+    if(uc.status === 'unknown') W.push('Underlying-contract check: fewer than 5 strikes had valid two-sided quotes, so F could not be verified against the chain — continuing with the entered futures price as-is.');
+  } else {
+    W.push('Futures price not found (Futures field of this section is empty) — Black-76 reconstruction skipped.');
+  }
+
+  let solved = 0, na = 0;
+  const nowChicago = nowInChicagoAsLocalParts();
+  rows.forEach(r => {
+    const bid = parseFloat(r.Bid), ask = parseFloat(r.Ask);
+    r.SpreadPct = (bid > 0 && ask >= bid) ? ((ask - bid) / ((ask + bid) / 2)).toFixed(4) : '';
+    if(!hasF) return;
+    if(!(T > 0)){ r.IV = 'N/A'; r.Delta = 'N/A'; r.Gamma = 'N/A'; r.IVSource = ''; return; }
+    const ageMin = lastTradeAgeMin(r.Time, nowChicago);
+    const picked = chooseIVPrice(r, ageMin, FRESH_THRESHOLD_MIN);
+    r.Fresh = picked.fresh ? 'true' : 'false';
+    r.LastTradeAgeMin = ageMin !== null ? String(ageMin) : '';
+    r.VolumeToday = ageMin !== null ? (r.Volume !== undefined ? r.Volume : '') : '0';
+    if(picked.price !== null){
+      const iv = impliedVol76(picked.price, F, parseFloat(r.Strike), T, r.OptionType);
+      if(iv !== null){
+        const g = black76Greeks(F, parseFloat(r.Strike), T, iv, r.OptionType);
+        r.IV = iv.toFixed(4); r.Delta = g.delta.toFixed(4); r.Gamma = g.gamma.toFixed(6); r.IVSource = picked.source; solved++;
+      } else { r.IV = 'N/A'; r.Delta = 'N/A'; r.Gamma = 'N/A'; r.IVSource = picked.source; na++; }
+    } else { r.IV = 'N/A'; r.Delta = 'N/A'; r.Gamma = 'N/A'; r.IVSource = 'none'; }
+  });
+  if(hasF && !(T > 0)) W.push(`Expiry ${expiry} 12:30 CT is already in the past — IV/Delta/Gamma not computed.`);
+  if(hasF && T > 0){
+    const sk = checkIVSkewSanity(rows, F, 25, 2);
+    if(sk.status === 'warn') W.push(`Possible wrong underlying: near-the-money median IV differs >2x between calls (${(sk.medCall*100).toFixed(1)}%) and puts (${(sk.medPut*100).toFixed(1)}%).`);
+    W.push(`Black-76: F=${F}, T=${hoursToExpiry.toFixed(2)}h to expiry (${tradingHours.toFixed(2)} trading hours) → ${solved} strike(s) solved, ${na} flagged N/A.`);
+  }
+
+  const header = ['Strike','OptionType','Time','Open','High','Low','Latest','Change','Bid','Ask','Volume','OpenInterest','Premium','IV','Delta','Gamma','Theta','Vega','IVSkew','ExtractedAt','Fresh','LastTradeAgeMin','IVSource','VolumeToday','FuturesUsed','ParityImpliedF','ParityGap','ParitySpread','ParitySource','UnderlyingCheck',
+                  'Expiry','ExpiryTimeIRST','HoursToExpiry','TradingHoursToExpiry','ContractType','UnderlyingSymbol','SpreadPct'];
+  const extra = {
+    ExtractedAt: nowTehranStr(),
+    FuturesUsed: hasF ? F.toFixed(2) : '',
+    ParityImpliedF: uc.implied !== undefined ? uc.implied.toFixed(2) : '',
+    ParityGap: uc.gap !== undefined ? uc.gap.toFixed(2) : '',
+    ParitySpread: uc.spread !== undefined ? uc.spread.toFixed(2) : '',
+    ParitySource: uc.source || '',
+    UnderlyingCheck: uc.status,
+    Expiry: expiry,
+    ExpiryTimeIRST: tehranYmdHm(expiryAt),
+    HoursToExpiry: hoursToExpiry.toFixed(2),
+    TradingHoursToExpiry: tradingHours.toFixed(2),
+    ContractType: nextEls.type.value,
+    UnderlyingSymbol: (nextEls.contract.value || '').trim().toUpperCase()
+  };
+  nextFinalHeader = header;
+  nextFinalRows = rows.sort((a,b) => {
+    const sa = parseFloat(a.Strike), sb = parseFloat(b.Strike);
+    return sa !== sb ? sa - sb : a.OptionType.localeCompare(b.OptionType);
+  }).map(r => header.map(h => extra[h] !== undefined ? extra[h] : (r[h] !== undefined ? r[h] : '')));
+
+  if(W.length){ nextEls.warnings.textContent = W.join('\n'); nextEls.warnings.style.display = 'block'; }
+  nextEls.status.textContent = `${nextFinalRows.length} final row(s) ready (expiry ${expiry}, ${nextEls.type.value}).`;
+  nextEls.downloadBtn.style.display = 'inline-block';
+  let html = '<thead><tr>' + header.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+  nextFinalRows.slice(0, 15).forEach(row => { html += '<tr>' + row.map(c => `<td>${c === '' ? '—' : c}</td>`).join('') + '</tr>'; });
+  nextEls.previewTable.innerHTML = html + '</tbody>';
+  nextEls.preview.style.display = 'block';
+}
+nextEls.processBtn.addEventListener('click', runNextProcessing);
+document.getElementById('nextMismatchSubmitBtn').addEventListener('click', () => {
+  const val = nextEls.mismatchInput.value.trim();
+  if(!val) return;
+  nextEls.futures.value = val; nextEls.futures.dataset.manual = '1';
+  runNextProcessing();
+});
+document.getElementById('nextMismatchUseImpliedBtn').addEventListener('click', () => {
+  const implied = nextEls.mismatchBox.dataset.implied;
+  if(!implied) return;
+  nextEls.futures.value = implied; nextEls.futures.dataset.manual = '1';
+  runNextProcessing();
+});
+
+// File name: same date/time stamp as today's file when that was built in the last 30 minutes, so the pair sorts together.
+function buildNextCsv(){
+  if(!nextFinalRows) return null;
+  const csv = [nextFinalHeader.join(',')].concat(nextFinalRows.map(r => r.map(c => {
+    const s = String(c);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+  }).join(','))).join('\n');
+  const now = new Date(), pad = n => String(n).padStart(2,'0');
+  let stamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+  if(lastTodayFileStamp && now - lastTodayFileStamp.at < 30*60000) stamp = lastTodayFileStamp.stamp;
+  return {csv, fname: `barchart_next_${stamp}.csv`};
+}
+nextEls.downloadBtn.addEventListener('click', () => {
+  const built = buildNextCsv();
+  if(!built) return;
+  const blob = new Blob(["﻿" + built.csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.download = built.fname;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+nextEls.driveBtn.addEventListener('click', () => {
+  const built = buildNextCsv();
+  if(!built){ nextEls.status.textContent = 'Nothing to send yet — process first.'; return; }
+  postCsvToDrive(built.fname, built.csv, nextEls.status, DAILY_RAW_FOLDER);
 });
 
 // ---------- Session High/Low (Asia/London/NY) via Twelve Data ----------
