@@ -40,7 +40,7 @@ ENGINE = (os.environ.get("TTS_ENGINE") or "auto").strip().lower()
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODELS = [m.strip() for m in (os.environ.get("GEMINI_MODEL") or
                  "gemini-3.8-flash-tts,gemini-3.8-flash-lite-tts").split(",") if m.strip()]
-GEMINI_MALE = os.environ.get("GEMINI_MALE_VOICE") or "Charon"    # "Informative"
+GEMINI_MALE = os.environ.get("GEMINI_MALE_VOICE") or "Puck"      # "Upbeat" — chosen by voice test
 GEMINI_FEMALE = os.environ.get("GEMINI_FEMALE_VOICE") or "Kore"  # "Firm"
 GEMINI_STYLE = os.environ.get("GEMINI_STYLE") or (
     "relaxed, conversational podcast between two friends; natural, lively intonation; moderate pace")
