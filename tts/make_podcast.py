@@ -68,6 +68,9 @@ MS_CONCURRENCY = 3
 PAUSE_SEC = float(os.environ.get("PAUSE_SEC") or "0.45")
 SAMPLE_RATE = 24000
 BITRATE_K = 64
+# Evens out loudness over ~2-second windows, so a quieter speaker (Gemini's man) comes up to the
+# other's level: 200 ms frames, 9-frame smoothing, peaks to 90 %, at most 8x (18 dB) boost.
+LEVEL_FILTER = os.environ.get("LEVEL_FILTER") or "dynaudnorm=f=200:g=9:p=0.9:m=8"
 UPLOAD_CHUNK = 8 * 1024 * 1024  # must be a multiple of 256 KB
 
 GAS_URL = os.environ.get("GAS_URL", "").strip()
@@ -255,6 +258,7 @@ def join_to_mp3(paths, out_path, workdir):
                 f.write(f"file '{silence}'\n")
             f.write(f"file '{p}'\n")
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", listfile,
+         "-af", LEVEL_FILTER,
          "-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "libmp3lame", "-b:a", f"{BITRATE_K}k",
          "-write_xing", "0", "-id3v2_version", "0", "-map_metadata", "-1", out_path])
 
