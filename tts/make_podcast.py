@@ -46,9 +46,10 @@ GEMINI_STYLE = os.environ.get("GEMINI_STYLE") or (
     "relaxed, conversational podcast between two friends; natural, lively intonation; moderate pace")
 # The man gets his own delivery note (the woman's, above, is the one that already sounds right).
 GEMINI_MALE_STYLE = os.environ.get("GEMINI_MALE_STYLE") or (
-    "conversational podcast between two friends; energetic and engaged, with clear enthusiasm; "
-    "bright, confident voice with expressive, lively intonation that rises and falls naturally; "
-    "natural conversational pace, neither rushed nor sleepy; match the female speaker's energy")
+    "conversational podcast between two friends; engaged and warm, with moderate, restrained "
+    "enthusiasm (not excited); bright, confident voice with expressive intonation that rises and "
+    "falls naturally; unhurried pace, about 10% slower than a typical podcast host, with short "
+    "natural pauses between sentences")
 STYLE = {"male": GEMINI_MALE_STYLE, "female": GEMINI_STYLE}
 CHUNK_CHARS = int(os.environ.get("CHUNK_CHARS") or "6000")
 # Truncation guard: Persian speech runs ~12-16 characters per second. A chunk whose audio is
