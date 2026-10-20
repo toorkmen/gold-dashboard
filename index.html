@@ -459,20 +459,6 @@
 
     <div id="daily-report" class="sub-pane">
       <section class="panel">
-        <h2>Latest Daily Report</h2>
-        <p class="hint">Reads the most recently modified <code>.md</code> file from the daily report folder in Google Drive and splits it into tabs by section.</p>
-        <div class="actions" style="margin:0 0 12px;">
-          <button id="dailyReportFetchBtn">Load latest report</button>
-          <button id="dailyReportListBtn">📋 Show all files</button>
-          <span id="dailyReportStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
-        </div>
-        <select id="dailyReportSelect" style="display:none;margin:0 0 12px;width:100%;max-width:480px;"><option value="">— choose a file —</option></select>
-        <div id="dailyReportBody"></div>
-      </section>
-
-      <hr style="border:none;border-top:1px solid var(--border);margin:36px 0;">
-
-      <section class="panel">
         <h2>Daily Podcast</h2>
         <p class="hint">Loads the latest podcast script (a <code>.txt</code> file, lines starting with <code>Man:</code>/<code>Woman:</code> or <code>آقا:</code>/<code>خانم:</code>) from the same daily report folder. "Make MP3" turns it into audio in the cloud.</p>
         <div class="actions" style="margin:0 0 12px;">
@@ -716,20 +702,6 @@
     </div>
 
     <div id="weekly-report" class="sub-pane">
-      <section class="panel">
-        <h2>Latest Weekly Report</h2>
-        <p class="hint">Reads the most recently modified <code>.md</code> file from the weekly report folder in Google Drive and splits it into tabs by section.</p>
-        <div class="actions" style="margin:0 0 12px;">
-          <button id="weeklyReportFetchBtn">Load latest report</button>
-          <button id="weeklyReportListBtn">📋 Show all files</button>
-          <span id="weeklyReportStatus" style="font-family:var(--mono);font-size:13px;color:var(--text-dim);"></span>
-        </div>
-        <select id="weeklyReportSelect" style="display:none;margin:0 0 12px;width:100%;max-width:480px;"><option value="">— choose a file —</option></select>
-        <div id="weeklyReportBody"></div>
-      </section>
-
-      <hr style="border:none;border-top:1px solid var(--border);margin:36px 0;">
-
       <section class="panel">
         <h2>Weekly Podcast</h2>
         <p class="hint">Loads the latest podcast script (a <code>.txt</code> file, lines starting with <code>Man:</code>/<code>Woman:</code> or <code>آقا:</code>/<code>خانم:</code>) from the same weekly report folder. "Make MP3" turns it into audio in the cloud.</p>
@@ -2979,14 +2951,8 @@ async function fetchLatestReport(folderId, bodyEl, statusEl, ext, cacheKey, name
 let DAILY_REPORT_FOLDER = localStorage.getItem('bc_dailyReport') || '';
 let WEEKLY_REPORT_FOLDER = localStorage.getItem('bc_weeklyReport') || '';
 
-document.getElementById('dailyReportFetchBtn').addEventListener('click', () => {
-  fetchLatestReport(DAILY_REPORT_FOLDER, document.getElementById('dailyReportBody'), document.getElementById('dailyReportStatus'), 'md', 'bc_cache_dailyReport', null, 'interpretation');
-});
 document.getElementById('dailyInterpFetchBtn').addEventListener('click', () => {
   fetchLatestReport(DAILY_REPORT_FOLDER, document.getElementById('dailyInterpBody'), document.getElementById('dailyInterpStatus'), 'md', 'bc_cache_dailyInterp', 'interpretation', null);
-});
-document.getElementById('weeklyReportFetchBtn').addEventListener('click', () => {
-  fetchLatestReport(WEEKLY_REPORT_FOLDER, document.getElementById('weeklyReportBody'), document.getElementById('weeklyReportStatus'), 'md', 'bc_cache_weeklyReport', null, 'interpretation');
 });
 document.getElementById('weeklyInterpFetchBtn').addEventListener('click', () => {
   fetchLatestReport(WEEKLY_REPORT_FOLDER, document.getElementById('weeklyInterpBody'), document.getElementById('weeklyInterpStatus'), 'md', 'bc_cache_weeklyInterp', 'interpretation', null);
@@ -3039,28 +3005,14 @@ function setupFileBrowser(cfg){
   });
 }
 
-setupFileBrowser({ folderId: DAILY_REPORT_FOLDER, ext:'md', exclude:'interpretation',
-  listBtnId:'dailyReportListBtn', selectId:'dailyReportSelect', bodyId:'dailyReportBody', statusId:'dailyReportStatus' });
 setupFileBrowser({ folderId: DAILY_REPORT_FOLDER, ext:'md', namelike:'interpretation',
   listBtnId:'dailyInterpListBtn', selectId:'dailyInterpSelect', bodyId:'dailyInterpBody', statusId:'dailyInterpStatus' });
-setupFileBrowser({ folderId: WEEKLY_REPORT_FOLDER, ext:'md', exclude:'interpretation',
-  listBtnId:'weeklyReportListBtn', selectId:'weeklyReportSelect', bodyId:'weeklyReportBody', statusId:'weeklyReportStatus' });
 setupFileBrowser({ folderId: WEEKLY_REPORT_FOLDER, ext:'md', namelike:'interpretation',
   listBtnId:'weeklyInterpListBtn', selectId:'weeklyInterpSelect', bodyId:'weeklyInterpBody', statusId:'weeklyInterpStatus' });
 
 
 // Restore whatever report was last successfully loaded, so it's there immediately without a fresh click.
 (function restoreReportCaches(){
-  const d = loadLocalCache('bc_cache_dailyReport');
-  if(d){
-    renderReportInto(document.getElementById('dailyReportBody'), d.content);
-    document.getElementById('dailyReportStatus').textContent = `Loaded "${d.filename}" (updated ${new Date(d.lastUpdated).toLocaleString()}) — from local cache. Click "Load latest report" to refresh.`;
-  }
-  const w = loadLocalCache('bc_cache_weeklyReport');
-  if(w){
-    renderReportInto(document.getElementById('weeklyReportBody'), w.content);
-    document.getElementById('weeklyReportStatus').textContent = `Loaded "${w.filename}" (updated ${new Date(w.lastUpdated).toLocaleString()}) — from local cache. Click "Load latest report" to refresh.`;
-  }
   const i = loadLocalCache('bc_cache_dailyInterp');
   if(i){
     renderReportInto(document.getElementById('dailyInterpBody'), i.content);
